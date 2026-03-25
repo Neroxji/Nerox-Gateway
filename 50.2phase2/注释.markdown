@@ -1,0 +1,15 @@
+## 笔记1
+    // 确保 Body 每次都是满的
+   `req.Body=io.NopCloser(bytes.NewReader(jsonData))`
+
+ps：因为在client.do{req}发车后req.body就已经被读完并且关掉了
+    `io.NopCloser 解决的是 “如何把数据重新装填回去” 的问题`
+
+
+
+## 笔记2 buffer和reader的区别   (同为io.Reader)
+特性        `bytes.Buffer `             `bytes.Reader`
+读写性      读+写 (Read & Write)         只读 (Read Only)
+内存开销    可能会因为扩容导致内存重新分配    `极低`（只是在原始切片上维护一个下标）
+典型用途    动态拼接字符串、存储临时结果      包装已有的 []byte 供 HTTP 发送或解析
+

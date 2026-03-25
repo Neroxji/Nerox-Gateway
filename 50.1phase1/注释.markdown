@@ -1,0 +1,61 @@
+###     phase1大致流程
+1. 写协议发前端
+2. 接前端 -> 序列化转json
+3. 向大模型发请求 -> 发车，回信 -> 开flusher模式 -> 扫描，反序列化，装车
+
+
+### 终端测试指令示例
+`  curl -N -X POST http://localhost:8080/api/chat \ `
+`  -H "Content-Type: application/json" \  `
+`  -d '{"messages": [{"role": "user", "content": "你好，我是用curl测试的！"}]}' `
+
+*PS*：type ChatRequest struct {
+    Model    string    // `你在后端强行覆盖了`
+   `Messages` []Message // `这个由前端来提供` **所以只用传这个**
+    Stream   bool      // `你在后端强行覆盖了`
+}
+
+
+## 笔记1：  大模型发回来的请求体大致样子：
+    {
+    "id": "chatcmpl-12345",
+    "object": "chat.completion.chunk",
+    "created": 1710920000,
+    "model": "deepseek-chat",
+
+   `"choices"`: [
+        {
+        "index": 0,
+        `"delta"`: {
+            `"content": "好"`
+        },
+
+        "finish_reason": null
+        }
+    ]
+    }
+# 笔记1.1:  ⬆️*json.Unmarshal 有一个非常强大的特性：它只解析你定义了的字段*
+
+
+## 笔记2:  在命令里直接要求它只显示监听级别（LISTEN）的进程     （当端口被占用的时候）
+   `lsof -nP -iTCP:8080 -sTCP:LISTEN`
+   `kill -9 57173` "-9"是强力模式，进程卡死就加
+
+   `lsof -ti :8080 | xargs kill -9`
+   ps:这个命令会自动找到占用 8080 端口的进程并杀掉它
+
+
+
+## 2.2
+func http.NewRequest(method s, url s, body io.Reader) (*http.Request, error)
+    `需要加请求头header的时候用`
+
+bytes.NewBuffer(jsonData)
+    `可以包成一个“流”，方便程序读取`
+
+## 2.3
+http.client{}
+    `是一个邮差，{}里面可以有很多的作用 (具体可以看文档)`
+
+resp,err:=client.Do(req)
+    `通过网络发出。一直等着知道服务器回信，或者报错`

@@ -1,0 +1,74 @@
+## 笔记1
+  无缓冲通道 (make(chan string))：
+  发送方和接收方必须“手递手”同步。哪怕发送方快如闪电，只要接收方没到，发送方就得`阻塞`
+
+
+
+## 笔记2
+ctx,cancel:=context.WithTimeout(req.Context(), 5*time.Second)
+时间过后就会自动调用cnacel()函数->导致`ctx.Done()` 这个 Channel 被关闭
+
+
+
+## 笔记3
+不需要自己写 `select`： 
+因为 Go 标准库的 `http.Client` 底层已经帮你写了！当调用 `client.Do(reqC)` 时，底层的 `Transport`会自己去 `select { case <-ctx.Done(): 断开TCP连接 }`。
+所以只要 5 秒一到，底层的 HTTP 请求会被瞬间强行掐断，tryStreamOnce 会立刻返回失败。
+
+
+
+## 笔记4  (qna)
+
+关于代码：req, err := `http.NewRequestWithContext`(r.Context(), "POST", url, bytes.NewReader(jsonData))
+r.Context()（初始化为 background）会传给 req 吗？
+
+[回答]
+是的，一定会传给 req。
+原理解释：http.NewRequestWithContext 的核心作用就是把传入的 Context `绑定到新创建的 HTTP 发送请求上`。
+实际效果：如果前端客户端断开了与网关的连接（引发 r.Context() 被取消），这个取消信号会`连带触发 req 取消`，从而立刻中断网关发往大模型的网络请求，避免服务器资源的浪费（防止“僵尸请求”）。
+
+==========
+
+关于代码：ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+r.Context() 会传给 ctx 吗？
+
+[回答]
+会传。
+原理解释：context.WithTimeout 会`基于父级（r.Context()）`创建一个具有叠加效果的“子 Context”。
+实际效果：ctx 此时受双重限制。无论是“`客户端主动断开连接`”还是“`等待时间超过了 5 秒`”，只要满足其中`任何一个条件`，ctx 都会立刻触发取消操作，完美实现双重兜底。
+
+==========
+
+
+
+## 笔记5
+在组装一个全新请求，最纯粹优雅的做法是把顺序调整为“`先包裹 Context，再组装 Request`”，这样彻底`不需要 Clone`：
+
+**以下是两种方法**
+
+[1]
+**先context，然后再newrequest**
+// 1. 先定闹钟
+ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+defer cancel()
+
+// 2. 拿着带闹钟的 ctx 直接创建请求
+req, _ := http.NewRequestWithContext(ctx, "POST", url, body) 
+
+**先newrequest，然后再context（这样需要clone）**
+[2]
+// 1. 先用广义的 r.Context() 创建普通请求
+req, _ := http.NewRequestWithContext(r.Context(), "POST", url, body)
+
+// 2. 业务判断：发现这个 URL 比较慢，需要加 5s 超时
+ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second) // 这里的父是 req 的 context
+defer cancel()
+
+// 3. 关键动作：你必须把新的 ctx 塞回给 req！
+`req = req.Clone(ctx)`// 必须有这一步，req 才会受 5s 限制
+
+**大致的图解**
+graph TD
+    A["r.Context() <br/>(最老的/根源: 只要前端不关, 我就不死)"] 
+    -->|context.WithTimeout| B["ctx <br/>(新生成的: 我继承了前端状态, 但我只能活5秒)"]
+    -->|http.NewRequestWithContext| C["req <br/>(发给大模型的请求: 我受 ctx 管控)"]
