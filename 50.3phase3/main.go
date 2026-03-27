@@ -8,17 +8,20 @@ import (
 
 func main() {
 
-	// 系统初始化
+	// 读取json文件
 	config, err := LoadConfig("config.json")
 	if err != nil {
 		log.Fatal("读文件错误:", err)
 		return
 	}
 
-	keypool := NewKeyPool(config.ApiKeys)
+	// 初始化keypool
+	for i:=0;i<len(config.Providers);i++{
+		config.Providers[i].Pool=NewKeyPool(config.Providers[i].Keys)
+	}
 
 	// 注册路由
-	http.HandleFunc("/api/chat", apiChatHandler(keypool))
+	http.HandleFunc("/api/chat", apiChatHandler(config))
 
 	// 启动服务
 	log.Println("服务器启动在 :8080...")

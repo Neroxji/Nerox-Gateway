@@ -68,7 +68,7 @@ func main() {
 
 		// 2.1
 		url := "https://api.deepseek.com/chat/completions"
-		apiKey := "Bearer sk-3d97ca82da204480941b721b9a190821"
+		apiKey := "---"
 		fmt.Println("准备向deepseek发起请求!")
 
 		// 2.2

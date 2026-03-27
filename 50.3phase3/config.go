@@ -7,7 +7,15 @@ import (
 
 // 接apikey的请求体
 type Config struct {
-	ApiKeys []string `json:"apikeys"`
+	Providers []Providers         `json:"providers"`
+	Fallbacks map[string][]string `json:"fallbacks"`
+}
+type Providers struct {
+	Name   string   `json:"name"`
+	Url    string   `json:"url"`
+	Model string   `json:"model"`
+	Keys   []string `json:"keys"`
+	Pool   *KeyPool `json:"-"`
 }
 
 // 读取config文件
@@ -24,4 +32,14 @@ func LoadConfig(filename string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// 寻找特定的大模型供应商
+func (c *Config) findProvider(targetName string)*Providers{
+	for i,_:=range c.Providers{
+		if c.Providers[i].Name==targetName{
+			return &c.Providers[i]
+		}
+	}
+	return nil
 }
