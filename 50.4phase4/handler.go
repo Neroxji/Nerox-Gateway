@@ -19,7 +19,7 @@ import (
 var (
 	ErrSuccess        = (error)(nil) // 没错误
 	ErrRetryNextKey   = errors.New("试试下一个key")
-	ErrRetryNextModel = errors.New("试是下一个厂家")
+	ErrRetryNextModel = errors.New("试试下一个厂家")
 )
 
 // 拿到api尝试一次流式传输
@@ -129,6 +129,9 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 		}
 		reqData.Stream = true
 
+		// -强制要求厂家在流式下返回 Token 消耗
+		reqData.StreamOptions = &StreamOptions{IncludeUsage: true}
+
 		// 1.1.1	找到容灾链
 		requestModel := reqData.Model
 		chain, ok := config.Fallbacks[requestModel]
@@ -178,16 +181,34 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 		KeyLoop:
 			for i := 0; i < len(currentProvider.Pool.keys); i++ {
 
+				// 4.0计时
+				startTime := time.Now()
 				usage, status := tryStreamOnce(c.Writer, req, client, currentProvider.Pool)
+				latancy := time.Since(startTime)
+
+				// 4.1.1
+				user := c.MustGet("currentUser").(User)
+				token := c.MustGet("currentToken").(Token)
+
+				// 4.1.2 初始化日志
+				var logEntry RequestLog
+				logEntry = RequestLog{
+					UserID:         user.ID,
+					TokenID:        token.ID,
+					TargetProvider: currentProvider.Name,
+					TargetModel:    currentProvider.Model,
+					CreatedAt:      startTime,
+					Latency:        int64(latancy.Milliseconds()),
+				}
 
 				switch status {
+				// -case1
 				case ErrSuccess:
 					log.Println("请求成功!")
 
-					// 计费并且更新数据库
+					// 计费、写日志 并且 更新数据库
+					logEntry.StatusCode = 200 // TODO(neroji):计费没成功没区分开
 					if usage != nil {
-						// 4.1
-						user := c.MustGet("currentUser").(User)
 
 						// 4.2.1
 						cost := (int64(usage.TotalTokens) * currentProvider.PricePerK) / 1000
@@ -199,20 +220,57 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 						err := DeductBalance(user.ID, cost)
 						if err != nil {
 							log.Printf("用户ID[%d]扣费失败: %v \n", user.ID, err)
+							logEntry.ErrorMessage = "扣费失败!!?"
 						} else {
 							log.Printf("用户ID[%d]扣费成功: %d \n", user.ID, cost)
 						}
+						logEntry.PromptTokens = usage.PromptTokens
+						logEntry.CompletionTokens = usage.CompletionTokens
+						logEntry.TotalTokens = usage.TotalTokens
+
 					} else {
-						log.Println("usage 为 nil，无法计费，请检查厂商响应格式")
+						log.Println("usage 为 nil, 无法计费, 请检查厂商响应格式")
+						logEntry.ErrorMessage = "usage没收到!!?"
+					}
+
+					// 4.3 投递“成功的”日志
+					select {
+					case LogChan <- logEntry:
+					default:
+						log.Println("[警告] 日志队列已满，本次日志被丢弃!")
 					}
 					return
+
+				// -case2
 				case ErrRetryNextKey:
 					log.Println("当前key受限, 换本厂商的下一个key试一下...")
+					logEntry.StatusCode = 429
+					logEntry.ErrorMessage = "当前apikey受限!!?"
+				// -case3
 				case ErrRetryNextModel:
 					log.Println("当前厂商的服务不稳定，切换到备用厂商...")
+					logEntry.StatusCode = 500
+					logEntry.ErrorMessage = "当前厂商的服务不稳定!!?"
+
+					// -“不成功”的日志
+					select {
+					case LogChan <- logEntry:
+					default:
+						log.Println("[警告] 日志队列已满，本次日志被丢弃!")
+					}
 					break KeyLoop
+				// -default保底
 				default:
 					log.Println("未知错误，换 Key 试试")
+					logEntry.StatusCode = 500
+					logEntry.ErrorMessage = "未知错误!!?"
+				}
+
+				// -“不成功”的日志
+				select {
+				case LogChan <- logEntry:
+				default:
+					log.Println("[警告] 日志队列已满，本次日志被丢弃!")
 				}
 
 				// - 确保 Body 每次都是满的

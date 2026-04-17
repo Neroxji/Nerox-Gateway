@@ -6,19 +6,23 @@ import (
 
 // 发给大模型的请求体
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model         string         `json:"model"`
+	Messages      []Message      `json:"messages"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
 
 // 大模型发回来的请求体
 type ChatResponse struct {
 	Choices []Choice `json:"choices"`
-	Usage   *Usage
+	Usage   *Usage   `json:"usage"`
 }
 type Choice struct {
 	Delta Delta `json:"delta"`
