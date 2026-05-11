@@ -17,31 +17,31 @@ import (
 )
 
 var (
-	ErrSuccess        = (error)(nil) // 没错误
-	ErrRetryNextKey   = errors.New("试试下一个key")
-	ErrRetryNextModel = errors.New("试试下一个厂家")
+	ErrSuccess        = (error)(nil) // no error
+	ErrRetryNextKey   = errors.New("try next KEY")
+	ErrRetryNextModel = errors.New("try next COMPANY")
 )
 
-// 拿到api尝试一次流式传输
+// get api and try a streaming session
 func tryStreamOnce(w http.ResponseWriter, req *http.Request, client http.Client, keypool *KeyPool) (*Usage, string, error) {
 	var finalUsage *Usage
 	var builder strings.Builder
 
-	// 1.1
+	// 1
 	apiKey := keypool.GetNextKey()
 
-	// 2.2.1
+	// 2.1
 	req.Header.Set("Authorization", apiKey)
 
-	// 2.3	发请求
+	// 2.2	send a request
 	resp, err := client.Do(req)
-	if err != nil { // 5秒超时到了，或者网络全断
-		log.Println("请求失败:", err)
+	if err != nil { // 5-sec timeout OR network disconnected
+		log.Println("Request fail:", err)
 		return nil, "", ErrRetryNextModel
 	}
 	defer resp.Body.Close()
 
-	// 2.4	准备流式传输
+	// 2.3	准备流式传输
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		log.Println("不支持流式传输")
@@ -49,7 +49,7 @@ func tryStreamOnce(w http.ResponseWriter, req *http.Request, client http.Client,
 		return nil, "", ErrSuccess
 	}
 
-	// 2.5	非200状态码返回
+	// 2.4	非200状态码返回
 	if resp.StatusCode != 200 {
 		log.Printf("key错误,状态吗:%d", resp.StatusCode)
 
@@ -61,7 +61,7 @@ func tryStreamOnce(w http.ResponseWriter, req *http.Request, client http.Client,
 		return nil, "", ErrRetryNextModel
 	}
 
-	// 2.6	流式传输
+	// 3	sse流式传输 (openai格式)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -71,16 +71,23 @@ func tryStreamOnce(w http.ResponseWriter, req *http.Request, client http.Client,
 		}
 
 		s := strings.TrimPrefix(line, "data:")
+		s = strings.TrimSpace(s)
 		if strings.Contains(s, "[DONE]") {
-			return finalUsage,builder.String(),ErrSuccess
+			return finalUsage, builder.String(), ErrSuccess
 		}
 
-		// 反序列化
-		var respData ChatResponse
+		// unmarshal response data
+		var respData OpenAIStreamResponse
 		err := json.Unmarshal([]byte(s), &respData)
 		if err != nil {
 			log.Println("解析响应json失败:", err)
-			fmt.Fprintf(w, "event: error\ndata: 解析响应失败\n\n")
+			errMsg := OpenAIErrorMsg{}
+			errMsg.Error.Message = "解析相应失败"
+			errMsg.Error.Type = "gateway_error"
+			errMsg.Error.Code = "internal_parse_error"
+			errBytes, _ := json.Marshal(errMsg)
+			fmt.Fprintf(w, "data: %s\n\n", string(errBytes))
+			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return nil, "", ErrSuccess
 		}
@@ -91,14 +98,20 @@ func tryStreamOnce(w http.ResponseWriter, req *http.Request, client http.Client,
 		}
 
 		if len(respData.Choices) > 0 { // 防直接panic
-			io.WriteString(w, respData.Choices[0].Delta.Content)
+			fmt.Fprintf(w, "data: %s\n\n", line)
 			builder.WriteString(respData.Choices[0].Delta.Content)
 			flusher.Flush()
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		log.Println("读取响应流失败:", err)
-		fmt.Fprintf(w, "event: error\ndata: 读取响应流失败\n\n")
+		errMsg := OpenAIErrorMsg{}
+		errMsg.Error.Message = "读取响应流失败"
+		errMsg.Error.Type = "gateway_error"
+		errMsg.Error.Code = "internal_scanner_error"
+		errBytes, _ := json.Marshal(errMsg)
+		fmt.Fprintf(w, "data: %s\n\n", string(errBytes))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 
 		// TODO(neroji): 处理流式响应中途异常断开的计费兜底。
@@ -121,25 +134,20 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 	} // - 全局client
 
 	return func(c *gin.Context) {
-		// 1.1	解析请求体
-		var reqData ChatRequest
-		err := c.ShouldBindJSON(&reqData)
+
+		user := c.MustGet("currentUser").(User)
+		token := c.MustGet("currentToken").(Token)
+
+		// global ratelimiting
+		ok, err := checkRateLimit(c.Request.Context(), user.ID)
 		if err != nil {
-			log.Println("解码json失败", err)
-			c.JSON(400, gin.H{"error": "前端参数不对"})
+			log.Println(err)
+			c.JSON(500, gin.H{"error": "Redis ratelimiting script fail"})
 			return
 		}
-		reqData.Stream = true
-
-		// -强制要求厂家在流式下返回 Token 消耗
-		reqData.StreamOptions = &StreamOptions{IncludeUsage: true}
-
-		// 1.1.1	找到容灾链
-		requestModel := reqData.Model
-		chain, ok := config.Fallbacks[requestModel]
 		if !ok {
-			log.Println("没有此模型")
-			c.JSON(404, gin.H{"error": "网关没有此模型"})
+			log.Println("ratelimiting successfully")
+			c.JSON(429, gin.H{"error": "too many request! please try againg for a few seconds"})
 			return
 		}
 
@@ -148,10 +156,103 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 
-		// 循环容灾链条		循环 1
+		// 1	解析请求体
+		var reqData ChatRequest
+		err = c.ShouldBindJSON(&reqData)
+		if err != nil {
+			log.Println("解码json失败", err)
+			c.JSON(400, gin.H{"error": "前端参数不对"})
+			return
+		}
+		reqData.Stream = true
+
+		// -search Redis
+		str, hit := getContentCache(c.Request.Context(), reqData)
+		if hit {
+			flusher, ok := c.Writer.(http.Flusher)
+			if !ok {
+				log.Println("not supported SSE format")
+				http.Error(c.Writer, "not supported SSE format", 500)
+				return
+			}
+
+			runes := []rune(str)
+			chunkSize := 20
+
+			// -public info
+			baseResp := OpenAIStreamResponse{
+				ID:      "chatcmpl-cache",
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   reqData.Model,
+				Choices: []Choice{
+					{Index: 0},
+				},
+			}
+
+			// -setup
+			baseResp.Choices[0].Delta = Delta{Role: "assistant"}
+			baseResp.Choices[0].FinishReason = nil
+			firstChunkByte, _ := json.Marshal(baseResp)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(firstChunkByte))
+			flusher.Flush()
+
+			// -send intermediate block
+			for i := 0; i < len(runes); i += chunkSize {
+				end := i + chunkSize
+				if end > len(runes) {
+					end = len(runes)
+				}
+				chunkStr := string(runes[i:end])
+				baseResp.Choices[0].Delta = Delta{Content: chunkStr}
+				chunkBytes, _ := json.Marshal(baseResp)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", string(chunkBytes))
+				flusher.Flush()
+			}
+
+			// -send the last block
+			stopStr := "stop"
+			baseResp.Choices[0].Delta = Delta{}
+			baseResp.Choices[0].FinishReason = &stopStr
+			lastChunk, _ := json.Marshal(baseResp)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(lastChunk))
+			fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+			flusher.Flush()
+
+			// -send requestlog
+			logEntry := RequestLog{
+				UserID:      user.ID,
+				TargetModel: reqData.Model,
+				StatusCode:  200,
+				CreatedAt:   time.Now(),
+				CacheHIT:    true,
+			}
+			select {
+			case LogChan <- logEntry:
+				return
+			default:
+				log.Println("[警告] 日志队列已满，本次日志被丢弃!")
+			}
+			return
+		}
+
+		// -强制要求厂家在流式下返回 Token 消耗
+		reqData.StreamOptions = &StreamOptions{IncludeUsage: true}
+
+		// 2	找到容灾链
+		UserModel := reqData.Model // -ensure Cache consistency
+		requestModel := reqData.Model
+		chain, ok := config.Fallbacks[requestModel]
+		if !ok {
+			log.Println("没有此模型")
+			c.JSON(404, gin.H{"error": "网关没有此模型"})
+			return
+		}
+
+		// 3  循环容灾链条		循环 1
 		for _, targetName := range chain {
 
-			// 1.1.2	找相关厂家的大模型配置
+			// 3.1	找相关厂家的大模型配置
 			currentProvider := config.findProvider(targetName)
 			if currentProvider == nil {
 				log.Println("没找到厂家的配置?")
@@ -159,7 +260,7 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 			}
 			reqData.Model = currentProvider.Model
 
-			// 1.2	序列化
+			// 3.2	序列化
 			jsonData, err := json.Marshal(reqData)
 			if err != nil {
 				log.Println("转json错误:", err)
@@ -167,10 +268,9 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 				return
 			}
 
-			// 2.1
 			log.Printf("准备向%s发起请求!\n", currentProvider.Name)
 
-			// 2.2	准备请求
+			// 3.3	准备请求
 			req, err := http.NewRequestWithContext(c.Request.Context(), "POST", currentProvider.Url, bytes.NewReader(jsonData))
 			if err != nil {
 				log.Println("创建请求失败:", err)
@@ -179,20 +279,16 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 			}
 			req.Header.Set("Content-Type", "application/json")
 
-			// 3.1		循环 1.1 循环相关大模型的apiKey
+			// 4		循环 1.1 循环相关大模型的apiKey
 		KeyLoop:
 			for i := 0; i < len(currentProvider.Pool.keys); i++ {
 
-				// 4.0计时
+				// 4.1计时
 				startTime := time.Now()
-				usage, _, status := tryStreamOnce(c.Writer, req, client, currentProvider.Pool)
+				usage, str, status := tryStreamOnce(c.Writer, req, client, currentProvider.Pool)
 				latancy := time.Since(startTime)
 
-				// 4.1.1
-				user := c.MustGet("currentUser").(User)
-				token := c.MustGet("currentToken").(Token)
-
-				// 4.1.2 初始化日志
+				// 4.2 初始化日志
 				var logEntry RequestLog
 				logEntry = RequestLog{
 					UserID:         user.ID,
@@ -208,17 +304,23 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 				case ErrSuccess:
 					log.Println("请求成功!")
 
-					// 计费、写日志 并且 更新数据库
+					// -set redis
+					reqData.Model = UserModel
+					if strings.TrimSpace(str) != "" {
+						setContentCache(c.Request.Context(), reqData, str)
+					}
+
+					// -计费、写日志 并且 更新数据库
 					logEntry.StatusCode = 200 // TODO(neroji):计费没成功没区分开
 					if usage != nil {
 
-						// 4.2.1
+						// —calculate the multiplier
 						cost := (int64(usage.TotalTokens) * currentProvider.PricePerK) / 1000
 						if cost == 0 && usage.TotalTokens > 0 {
 							cost = 1
 						}
 
-						// 4.2.2
+						// -calculate balance
 						err := DeductBalance(user.ID, cost)
 						if err != nil {
 							log.Printf("用户ID[%d]扣费失败: %v \n", user.ID, err)
@@ -235,7 +337,7 @@ func apiChatHandler(config *Config) gin.HandlerFunc {
 						logEntry.ErrorMessage = "usage没收到!!?"
 					}
 
-					// 4.3 投递“成功的”日志
+					// -send "success" log
 					select {
 					case LogChan <- logEntry:
 					default:

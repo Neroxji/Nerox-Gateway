@@ -43,7 +43,6 @@ func InitDB(dsn string) {
 		log.Fatalf("自动建表失败: %v", err)
 	}
 	log.Println("数据库表结构同步完成！")
-
 }
 
 // 扣费函数

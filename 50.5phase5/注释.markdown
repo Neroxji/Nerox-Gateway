@@ -1,15 +1,117 @@
 用md5的原因
 快（性能）：
-
 Redis 查找 32 字节的 Key 远比查找 2KB（长文本）的 Key 快得多。
 减少了网关和 Redis 之间传输大数据量 Key 的网络开销。
 省（空间）：
-
 无论用户的问题是一句话还是一个万字长文，在 Redis 索引里都只占固定长度空间，极大地节省了昂贵的 Redis 内存。
 稳（安全可靠）：
-
 规避非法字符：用户输入可能包含换行、空格、Emoji 或特殊控制符，直接做 Key 极易引发 Redis 协议解析错误。MD5 后的 Hex 字符串只有 0-9 和 a-f，绝对安全。
 长度可控：防止用户恶意通过超长文本作为 Key 来撑爆你的内存或触发单行处理瓶颈。
 
 md5.Sum(...): 这是核心。它把任意长度的字节流，经过数学运算，压缩成一个固定长度为 16 的字节数组 [16]byte。
 md5str := hex.EncodeToString(hash[:]) 它的作用是把这 16 个字节，转成我们熟悉的 32 位 16 进制字符串（比如 d41d8cd98f00b204e9800998ecf8427e）
+
+
+
+
+Go 语言中 io.WriteString 与 fmt.Fprintf 的区别总结
+
+1. io.WriteString
+- 定位：高效、基础的字符串写入工具。
+- 逻辑：直接将字符串写入 io.Writer。如果目标对象实现了 WriteString 方法（如 os.File, bytes.Buffer），则直接调用，避免 string 到 []byte 的内存转换开销。
+- 优点：性能极高，内存分配极少。
+- 缺点：功能单一，不支持格式化，只能写入原样字符串。
+- 适用场景：高性能需求、写入纯字符串、已知内容的拼接。
+
+2. fmt.Fprintf
+- 定位：功能强大的格式化输出工具。
+- 逻辑：解析格式化字符串（如 %d, %v），通过反射（Reflection）处理参数，转换为字符串后写入。
+- 优点：非常灵活，支持多种数据类型混合写入，支持对齐、精度控制等。
+- 缺点：性能较慢（解析+反射），内存开销较大（接口装箱+可能的堆分配）。
+- 适用场景：复杂的日志记录、构造含变量的动态消息、代码可读性要求高的非性能核心路径。
+
+3. 快速对比
+| 特性          | io.WriteString             | fmt.Fprintf                |
+| :------------ | :------------------------- | :------------------------- |
+| 性能          | 极高 (原生/接近底层)        | 较低 (涉及反射和解析)        |
+| 灵活性        | 低 (仅限字符串)             | 高 (支持所有 Go 类型)        |
+| 典型用法      | io.WriteString(w, "msg")   | fmt.Fprintf(w, "%s: %d", s, i)|
+| 内存优化      | 自动检测 WriteString 接口    | 参数会逃逸到堆，解析有开销    |
+
+4. 最佳实践建议
+- 如果只是写入一个现成的字符串，优先使用 io.WriteString。
+- 如果需要拼接多个变量或进行格式控制，使用 fmt.Fprintf。
+- 在高性能循环或热点代码路径中，尽量避免使用 fmt.Fprintf。
+
+
+
+
+LLM ChatRequest 核心参数说明
+
+1. Temperature (采样温度)
+   - 作用：控制生成结果的随机性和创造性。
+   - 范围：0.0 ~ 2.0。
+   - 低值 (如 0.2)：结果更聚焦、确定、一致。适合逻辑推理、代码编写。
+   - 高值 (如 0.8)：结果更随机、有创意、多样化。适合创作、头脑风暴。
+   - 架构提示：对于缓存系统，建议在 Key 中包含此参数，或仅对低 Temperature 请求进行缓存。
+
+2. TopP (核采样/累计概率采样)
+   - 作用：另一种控制随机性的方式。模型只从累积概率超过 P 的候选词中采样。
+   - 建议：通常与 Temperature 二选一使用，不要同时调整。
+
+3. MaxTokens (最大生成长度)
+   - 作用：限制模型单次回复的最大 Token 数量。
+   - 架构提示：网关层的“防火墙”。必须设置此值以防止恶意用户消耗过多额度（Token = 钱）。
+
+4. PresencePenalty (存在惩罚)
+   - 作用：惩罚已经出现过的词，鼓励模型谈论新话题。
+   - 范围：-2.0 ~ 2.0。
+   - 效果：正值越高，模型越不容易说重复的话（防止复读机现象）。
+
+
+
+
+JSON 里包含了下面这 5 个核心骨架，对于 99% 的前端（包括 Next-Web 和 OpenClaw）来说，就已经做到了“完全透明”：
+"id": 随便编一个，比如 "chatcmpl-cache"。
+"object": 必须是 "chat.completion.chunk"。
+"created": 一个时间戳。
+"model": 请求的模型名字。
+"choices": 包含 delta.content 或 finish_reason。
+
+
+
+-2 代表 key 不存在
+-1 代表 key 存在，但【永不过期】
+当你刚执行完 INCR key，还没来得及执行 EXPIRE key 60 时，这个 key 的状态就是 永不过期（TTL = -1）。
+业务结果：【永久封号】
+
+lua脚本示例
+const rateLimitScript = `
+local count = redis.call("INCR",KEYS[1])
+if count == 1 then
+	redis.call("EXPIRE",KEYS[1],ARGV[1])
+end
+return count
+`
+KEYS[1] 代表我们传进去的 key（例如 ratelimit:1:1000）
+ARGV[1] 代表我们传进去的过期时间（例如 60）
+
+
+
+
+[]string(key)   // ❌ 类型转换：试图把一个 string "变成" []string
+                //    这在 Go 里不合法，string 和 []string 根本不兼容
+[]string{key}   // ✅ 切片字面量：构造一个新的 []string，里面放一个元素 key
+Type(x) 是转换，Type{x} 是构造
+
+# 停掉本地抢活的
+brew services stop redis  
+
+# 方式 A：后台常驻运行（推荐，下次开机自动启动）
+brew services start redis
+# 方式 B：前台运行（如果你想在终端看到 Redis 的运行日志）
+redis-server
+
+
+
+redis set只接受string或者字节流

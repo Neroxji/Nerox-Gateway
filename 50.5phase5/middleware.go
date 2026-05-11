@@ -2,7 +2,7 @@ package main
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -36,19 +36,25 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		// 2	token鉴权
-		var token Token
-		result := DB.Where("token_key=? AND status=?", apiKey, 1).First(&token)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			c.AbortWithStatusJSON(401, gin.H{"error": "查不到该apiKey!"})
-			return
+		token, hit := getTokenCache(c.Request.Context(), apiKey)
+		if !hit {
+			result := DB.Where("token_key=? AND status=?", apiKey, 1).First(&token)
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				c.AbortWithStatusJSON(401, gin.H{"error": "查不到该apiKey!"})
+				return
+			}
+			setTokenCache(c.Request.Context(), apiKey, token)
 		}
 
 		// 2.1	user鉴权
-		var user User
-		result = DB.Where("id=?", token.UserID).First(&user)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			c.AbortWithStatusJSON(500, gin.H{"error": "查不到该用户!"})
-			return
+		user, hit := getUserCache(c.Request.Context(), token.UserID)
+		if !hit {
+			result := DB.Where("id=?", token.UserID).First(&user)
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				c.AbortWithStatusJSON(500, gin.H{"error": "查不到该用户!"})
+				return
+			}
+			setUserCache(c.Request.Context(), token.UserID, user)
 		}
 		if user.Status == 0 {
 			c.AbortWithStatusJSON(403, gin.H{"error": "用户被封禁!"})
@@ -62,7 +68,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		// 3
 		c.Set("currentToken", token)
 		c.Set("currentUser", user)
-		fmt.Println("已存入user")
+		log.Println("store user,token")
 
 		c.Next()
 
