@@ -59,7 +59,7 @@ func getContentCache(ctx context.Context, req ChatRequest) (string, bool) {
 		log.Printf("content redis dead?! err:%s", err)
 		return "", false
 	}
-	log.Println("HIT cache:Content")
+	// log.Println("HIT cache:Content")
 	return str, true
 }
 
@@ -103,7 +103,7 @@ func getTokenCache(ctx context.Context, apiKey string) (Token, bool) {
 	// 2
 	val, err := RDB.Get(ctx, key).Result()
 	if err == redis.Nil {
-		log.Println("No token cache info!")
+		// log.Println("No token cache info!")
 		return Token{}, false
 	}
 	if err != nil {
@@ -118,7 +118,7 @@ func getTokenCache(ctx context.Context, apiKey string) (Token, bool) {
 		log.Printf("token unmarshal fail! please check the format?! err:%s", err)
 		return Token{}, false
 	}
-	log.Println("HIT cache:Token")
+	// log.Println("HIT cache:Token")
 	return token, true
 }
 
@@ -190,7 +190,7 @@ func getUserCache(ctx context.Context, ID uint) (User, bool) {
 		log.Printf("user unmarshal fail! please check the format?! err:%s", err)
 		return User{}, false
 	}
-	log.Println("HIT cache:User")
+	// log.Println("HIT cache:User")
 	return user, true
 }
 
@@ -252,7 +252,7 @@ func checkRateLimit(ctx context.Context, userID uint) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("Redis ratelimiting script fail:%w", err)
 	}
-	if count > 10 {
+	if count > 100000000 {
 		return false, nil
 	}
 
