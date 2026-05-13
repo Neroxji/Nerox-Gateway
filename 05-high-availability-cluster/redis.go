@@ -30,7 +30,7 @@ func initRedis() {
 	if err != nil {
 		log.Fatalf("redis initialization err!! %s", err)
 	}
-	log.Println("redis connects successfully!!")
+	// log.Println("redis connects successfully!!")
 }
 
 // get Content
@@ -252,7 +252,7 @@ func checkRateLimit(ctx context.Context, userID uint) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("Redis ratelimiting script fail:%w", err)
 	}
-	if count > 100000000 {
+	if count > 10{
 		return false, nil
 	}
 

@@ -26,7 +26,7 @@ func InitDB(dsn string) {
 	if err != nil {
 		log.Fatalf("连接 MySQL 失败: %v", err)
 	}
-	log.Println("成功连接 MySQL 数据库!")
+	// log.Println("成功连接 MySQL 数据库!")
 
 	// 2.2拿到底层的对象
 	sqlDB, err := DB.DB()
@@ -42,7 +42,7 @@ func InitDB(dsn string) {
 	if err != nil {
 		log.Fatalf("自动建表失败: %v", err)
 	}
-	log.Println("数据库表结构同步完成！")
+	// log.Println("数据库表结构同步完成！")
 }
 
 // 扣费函数

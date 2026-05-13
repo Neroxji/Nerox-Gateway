@@ -1,0 +1,63 @@
+# Go-LLM-Gateway (高性能大模型 API 网关)
+
+本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。
+
+---
+## 📚最终的核心路由架构图
+![架构图](assets/architecture.png)
+---
+
+## 🚀 核心性能指标 (Benchmarks)
+经 `Hey` 工具实测（并发 50），本项目在核心链路上表现如下 ：
+
+* **QPS**: 突破 **8700+** 。
+* **延迟**: P99 稳定在 **10ms** 以内 。
+
+<details>
+  <summary>🔍 点击查看 QPS & 延迟测试截图</summary>
+  <br>
+  <img src="assets/benchmark_qps.png" alt="Benchmark QPS" width="100%">
+</details>                          
+<p></p> 
+
+* **拦截响应**: 分布式限流在 **1.5万+ QPS** 的恶意刷量场景下，依然保持微秒级拦截响应 。
+
+<details>
+  <summary>🛡️ 点击查看限流拦截效果图</summary>
+  <br>
+  <img src="assets/rate_limit_demo.png" alt="Rate Limiting Response" width="100%">
+</details>
+
+
+## 🛠 架构演进之路 
+本项目按照开发顺序划分为 5 个阶段，每个文件夹代表一个性能里程碑。这种目录结构展示了系统是如何一步步通过调优解决性能瓶颈的。
+
+### Phase 1 & 2: 基础代理与 Key 池化
+**对应目录**: `01-stream-proxy-basic`, `02-api-key-pooling` 
+* **流式转发**: 实现基于 **SSE (Server-Sent Events)** 的流式传输，对接 OpenAI 格式流 。
+* **Key 池调度**: 设计并实现多厂商（如 DeepSeek、Qwen）的 API Key 池化管理，支持多密钥请求调度与容灾切换 。
+
+### Phase 3: 协议适配与中间件化
+**对应目录**: `03-multi-provider-adapter`
+* **框架重构**: 引入 **Gin 框架** 进行路由重构，并编写自定义鉴权中间件保障接口安全 。
+* **格式统一**: 负责请求序列化、响应解析及跨厂商的统一封装 。
+
+### Phase 4: 异步架构性能调优 (关键里程碑)
+**对应目录**: `04-gin-middleware-refactor`
+* **解决 DB I/O 瓶颈**: 在基准测试中发现数据库同步 I/O 成为主干链路阻塞点 。
+* **Channel 异步化**: 利用 **Channel 缓冲队列** 重构日志异步落库机制，消除阻塞，使单机 QPS 实现质的飞跃 。
+
+### Phase 5: 高可用加固与缓存优化
+**对应目录**: `05-high-availability-cluster`
+* **多级缓存设计**: 接入 Redis 维护 Token 鉴权信息，通过提取请求特征生成 **MD5 短 Key** 建立索引，优化内存占用与查询延迟 。
+* **防御机制**:
+    * **防雪崩**: 结合随机时间抖动 (**Jitter**) 有效防止大规模缓存同时失效 。
+    * **防刷量**: 编写并注入 **Redis Lua 脚本** 实现分布式限流，确保超高并发下的原子性操作 。
+
+---
+
+## 💻 技术栈
+* **语言**: Go (Goroutine, Channel, Context) 
+* **框架**: Gin, GORM 
+* **存储**: MySQL (索引/锁优化), Redis (Lua 脚本/缓存策略) 
+* **协议**: HTTP/SSE, TCP/IP
