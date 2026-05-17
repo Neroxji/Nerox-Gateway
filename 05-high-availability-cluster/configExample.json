@@ -1,0 +1,35 @@
+{
+	"providers": [
+		{
+			"name": "deepseek",
+			"url": "https://api.deepseek.com/chat/completions",
+			"model": "deepseek-v4-flash",
+			"keys": [
+				"ApiKey 1",
+				"ApiKey 2"
+			],
+			"price_per_k": 500
+		},
+		{
+			"name": "qwen",
+			"url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+			"model": "qwen-plus-2025-07-28",
+			"keys": [
+				"ApiKey 1",
+				"ApiKey 2"
+			],
+			"price_per_k": 200
+		}
+	],
+	"fallbacks": {
+		"deepseek-v4-flash": [
+			"deepseek",
+			"qwen"
+		],
+		"qwen-plus-2025-07-28": [
+			"qwen",
+			"deepseek"
+		]
+	},
+	"DSN": "root:123456@tcp(127.0.0.1:3306)/ai_gateway?charset=utf8mb4&parseTime=True&loc=Local"
+}

@@ -1,6 +1,6 @@
 # Go-LLM-Gateway (高性能大模型 API 网关)
 
-本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。
+本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。底下还有docker简易部署教程
 
 ---
 ## 📚最终的核心路由架构图
@@ -10,7 +10,7 @@
 ## 🚀 核心性能指标 (Benchmarks)
 经 `Hey` 工具实测（并发 50），本项目在核心链路上表现如下 ：
 
-* **QPS**: 突破 **8700+** 。
+* **QPS**: 本地环境单机测试下（MBAm2 8核8g） **8700+** 。
 * **延迟**: P99 稳定在 **10ms** 以内 。
 
 <details>
@@ -61,3 +61,78 @@
 * **框架**: Gin, GORM 
 * **存储**: MySQL (索引/锁优化), Redis (Lua 脚本/缓存策略) 
 * **协议**: HTTP/SSE, TCP/IP
+* **部署**: Docker, Docker Compose
+
+---
+
+## 🐳 本地部署
+
+依赖：装好 [Docker](https://www.docker.com/products/docker-desktop/) 就行，不需要本地装 Go / MySQL / Redis。
+
+**第一步：获取代码**
+
+```bash
+git clone https://github.com/Neroxji/Go-LLM-Gateway.git
+cd Go-LLM-Gateway
+```
+
+**第二步：配置 API Key**
+
+因为真正的配置文件被忽略了，所以需要先复制一份示例配置：
+
+```bash
+cp 05-high-availability-cluster/configExample.json 05-high-availability-cluster/config.json
+```
+
+然后编辑 `05-high-availability-cluster/config.json`，把 `keys` 换成自己的。并且可以自己尝试放很多不同的厂商的大模型😺
+
+```json
+{
+  "providers": [
+    {
+      "name": "deepseek",
+      "url": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-v4-flash",
+      "keys": ["Bearer sk-你的key"],
+      "price_per_k": 500
+    }
+  ],
+  ...
+}
+```
+
+**第三步：按需修改密码（可选）**
+
+`docker-compose.yml` 里默认密码是 `123456`，自己部署的话改一下，两处要一致：
+
+```yaml
+MYSQL_ROOT_PASSWORD: 你的密码
+DSN: "root:你的密码@tcp(mysql:3306)/ai_gateway?..."
+```
+
+**第四步：构建 & 启动**
+
+```bash
+docker build -t aigateway:v1.0 .
+docker-compose up -d
+```
+
+第一次会拉基础镜像，稍微等一下。跑完之后：
+
+```bash
+docker-compose ps        # 三个容器都是 Up 就说明正常
+docker-compose logs app  # 看有没有报错
+```
+
+服务启动后监听 `http://localhost:8080`。
+
+**停止服务**
+
+```bash
+docker-compose down          # 停止，数据保留
+docker-compose down -v       # 停止并清掉数据库数据
+```
+
+---
+
+> config.json 是通过 volume 挂载进容器的，修改 API Key 后直接 `docker-compose restart app` 生效，不需要重新 build 镜像。

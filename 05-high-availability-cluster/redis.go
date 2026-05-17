@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 	"math/rand"
+	"os"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -18,9 +19,15 @@ var RDB *redis.Client
 // initialize redis
 func initRedis() {
 
+	// 优先从环境变量读取，方便 Docker 部署；本地开发默认用 localhost:6379
+	redisAddr := os.Getenv("REDIS_HOST")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+
 	// 1	connect to redis
 	RDB = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     redisAddr,
 		Password: "", // production environment must enter pw！
 		DB:       0,
 	})
@@ -30,7 +37,7 @@ func initRedis() {
 	if err != nil {
 		log.Fatalf("redis initialization err!! %s", err)
 	}
-	// log.Println("redis connects successfully!!")
+	log.Printf("✅ Redis connected: %s", redisAddr)
 }
 
 // get Content

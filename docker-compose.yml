@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: aigateway-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: ai_gateway          
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: aigateway-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # AI Gateway
+  app:
+    image: aigateway:v1.0
+    container_name: aigateway-app
+    ports:
+      - "8080:8080"
+    environment:
+      DSN: "root:123456@tcp(mysql:3306)/ai_gateway?charset=utf8mb4&parseTime=True&loc=Local"
+      REDIS_HOST: "redis:6379"
+    volumes:
+      - ./05-high-availability-cluster/config.json:/app/config.json:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:

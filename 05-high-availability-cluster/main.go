@@ -28,6 +28,12 @@ func main() {
 		config.Providers[i].Pool = NewKeyPool(config.Providers[i].Keys)
 	}
 
+	// 环境变量 DSN 优先（Docker 部署时使用），否则用 config.json 里的值
+	if envDSN := os.Getenv("DSN"); envDSN != "" {
+		config.DSN = envDSN
+		log.Println("✅ 使用环境变量 DSN")
+	}
+
 	// 启动并连接数据库
 	InitDB(config.DSN)
 
