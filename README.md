@@ -1,6 +1,6 @@
 # Go-LLM-Gateway (高性能大模型 API 网关)
 
-本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。底下还有docker简易部署教程
+本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。底下还有docker部署并且给api测试的简易教程。
 
 ---
 ## 📚最终的核心路由架构图
@@ -10,7 +10,7 @@
 ## 🚀 核心性能指标 (Benchmarks)
 经 `Hey` 工具实测（并发 50），本项目在核心链路上表现如下 ：
 
-* **QPS**: 本地环境单机测试下（MBAm2 8核8g） **8700+** 。
+* **QPS**: 本地环境单机测试（MBAm2 8核8g）并且 命中缓存 的情况下 **8700+** 。
 * **延迟**: P99 稳定在 **10ms** 以内 。
 
 <details>
@@ -20,7 +20,7 @@
 </details>                          
 <p></p> 
 
-* **拦截响应**: 分布式限流在 **1.5万+ QPS** 的恶意刷量场景下，依然保持微秒级拦截响应 。
+* **拦截响应**: 分布式限流在 **1.5万+ QPS** 的恶意刷量场景下（限流拦截），依然保持微秒级拦截响应 。
 
 <details>
   <summary>🛡️ 点击查看限流拦截效果图</summary>
@@ -62,6 +62,7 @@
 * **存储**: MySQL (索引/锁优化), Redis (Lua 脚本/缓存策略) 
 * **协议**: HTTP/SSE, TCP/IP
 * **部署**: Docker, Docker Compose
+* **测试**: Postman
 
 ---
 
@@ -76,15 +77,9 @@ git clone https://github.com/Neroxji/Go-LLM-Gateway.git
 cd Go-LLM-Gateway
 ```
 
-**第二步：配置 API Key**
+**第二步：填写你自己的 API Key**
 
-因为真正的配置文件被忽略了，所以需要先复制一份示例配置：
-
-```bash
-cp 05-high-availability-cluster/configExample.json 05-high-availability-cluster/config.json
-```
-
-然后编辑 `05-high-availability-cluster/config.json`，把 `keys` 换成自己的。并且可以自己尝试放很多不同的厂商的大模型😺
+编辑 `05-high-availability-cluster/config.json`，把 `keys` 换成自己的。并且可以自己尝试放很多不同的厂商的大模型😺
 
 ```json
 {
@@ -136,3 +131,113 @@ docker-compose down -v       # 停止并清掉数据库数据
 ---
 
 > config.json 是通过 volume 挂载进容器的，修改 API Key 后直接 `docker-compose restart app` 生效，不需要重新 build 镜像。
+
+---
+
+## 🧪 API 测试（Postman）
+
+服务跑起来后，按以下顺序调用接口。
+
+### 第一步：创建用户
+
+```
+POST http://localhost:8080/admin/users/create
+Content-Type: application/json
+```
+
+```json
+{
+  "username": "testuser",
+  "balance": 100000
+}
+```
+
+返回示例：
+```json
+{
+  "message": "create user successfully!",
+  "user_id": 1,
+  "balance": 100000
+}
+```
+<details>
+  <summary>📸 点击查看创建用户测试截图</summary>
+  <br>
+  <img src="截屏2026-05-18 15.18.37.png" alt="Create User Test 1" width="100%">
+  <br><br>
+  <img src="截屏2026-05-18 15.23.47.png" alt="Create User Test 2" width="100%">
+</details>
+
+---
+
+### 第二步：给用户创建 Token
+
+```
+POST http://localhost:8080/admin/tokens/create
+Content-Type: application/json
+```
+
+```json
+{
+  "user_id": 1,
+  "name": "我的测试密钥"
+}
+```
+
+返回示例：
+```json
+{
+  "message": "create token successfully!",
+  "token_id": 1,
+  "token_key": "sk-xxxxxx"
+}
+```
+
+把 `token_key` 的值复制下来，下一步要用。
+<details>
+  <summary>🔑 点击查看创建 Token 测试截图</summary>
+  <br>
+  <img src="截屏2026-05-18 15.18.57.png" alt="Create Token Test" width="100%">
+  <br><br>
+  <img src="截屏2026-05-18 15.23.58.png" alt="Create Token Test" width="100%">
+</details>
+
+---
+
+### 第三步：发起对话请求
+
+```
+POST http://localhost:8080/api/v1/chat
+Authorization: Bearer sk-xxxxxx（上一步拿到的 token_key）
+Content-Type: application/json
+```
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好"
+    }
+  ]
+}
+```
+
+网关会自动选择可用的 Provider 转发请求，支持SSE流式响应。
+<details>
+  <summary>💬 点击查看对话请求（SSE流式）测试截图</summary>
+  <br>
+  <img src="截屏2026-05-18 15.17.08.png" alt="Chat SSE Test" width="100%">
+</details>
+
+
+---
+
+### 其他：禁用用户
+
+```
+DELETE http://localhost:8080/admin/users/:id
+```
+
+把 `:id` 替换成具体的用户 ID，例如 `/admin/users/1`。执行后该用户的 Token 将无法继续使用。

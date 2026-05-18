@@ -54,7 +54,7 @@ func main() {
 	r.Use(CorsMiddleware())
 
 	// 注册路由
-	v1Group:=r.Group("/api/v1")
+	v1Group := r.Group("/api/v1")
 	v1Group.Use(AuthMiddleware())
 	{
 		v1Group.POST("/chat", apiChatHandler(config))
@@ -63,6 +63,8 @@ func main() {
 	// -TODO: adminGroup.Use(AdminAuthMiddleware())
 	{
 		adminGroup.DELETE("/users/:id", DeleteUserHandler())
+		adminGroup.POST("/users/create", CreateUserHandler())
+		adminGroup.POST("/tokens/create", CreateTokenHandler())
 	}
 
 	// 启动服务
