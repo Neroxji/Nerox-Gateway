@@ -1,6 +1,6 @@
 # Nerox-Gateway (高性能大模型 API 网关)
 
-本项目是我在大二期间为了深入学习 **Go 并发编程**与**高性能后端架构**而开发的实战项目 。它不仅是一个支持 OpenAI 格式的统一代理网关，更完整记录了我从“同步阻塞”到“异步高性能架构”的演进过程 。底下还有Docker部署并且给API测试的简易教程。
+这是一个面向 OpenAI 兼容接口的统一大模型 API 网关，当前版本聚焦高可用、鉴权计费、缓存优化和多厂商故障转移。项目使用 Go、Gin、MySQL 和 Redis，支持 SSE 流式响应、API Key 池化、分布式限流和 Docker Compose 部署。
 
 ---
 
@@ -38,30 +38,14 @@
 </details>
 
 
-## 🛠 架构演进之路 
-本项目按照开发顺序划分为 5 个阶段，每个文件夹代表一个性能里程碑。这种目录结构展示了系统是如何一步步通过调优解决性能瓶颈的。
+## 🧩 核心能力
 
-### Phase 1 & 2: 基础代理与 Key 池化
-**对应目录**: `01-stream-proxy-basic`, `02-api-key-pooling` 
-* **流式转发**: 实现基于 **SSE (Server-Sent Events)** 的流式传输，对接 OpenAI 格式流 。
-* **Key 池调度**: 设计并实现多厂商（如 DeepSeek、Qwen）的 API Key 池化管理，支持多密钥请求调度与容灾切换 。
-
-### Phase 3: 协议适配与中间件化
-**对应目录**: `03-multi-provider-adapter`
-* **框架重构**: 引入 **Gin 框架** 进行路由重构，并编写自定义鉴权中间件保障接口安全 。
-* **格式统一**: 负责请求序列化、响应解析及跨厂商的统一封装 。
-
-### Phase 4: 异步架构性能调优 (关键里程碑)
-**对应目录**: `04-gin-middleware-refactor`
-* **解决 DB I/O 瓶颈**: 在基准测试中发现数据库同步 I/O 成为主干链路阻塞点 。
-* **Channel 异步化**: 利用 **Channel 缓冲队列** 重构日志异步落库机制，消除阻塞，使单机 QPS 实现质的飞跃 。
-
-### Phase 5: 高可用加固与缓存优化
-**对应目录**: `05-high-availability-cluster`
-* **多级缓存设计**: 接入 Redis 维护 Token 鉴权信息，通过提取请求特征生成 **MD5 短 Key** 建立索引，优化内存占用与查询延迟 。
-* **防御机制**:
-    * **防雪崩**: 结合随机时间抖动 (**Jitter**) 有效防止大规模缓存同时失效 。
-    * **防刷量**: 编写并注入 **Redis Lua 脚本** 实现分布式限流，确保超高并发下的原子性操作 。
+* **多厂商适配与故障转移**：统一请求协议，按模型配置 Provider fallback 链路。
+* **API Key 池化**：轮询多个密钥，并在单个密钥或 Provider 失败时自动切换。
+* **鉴权与计费**：通过 Token 关联用户账户，使用数据库事务和行级锁完成并发扣费。
+* **Redis 缓存**：缓存 Token 鉴权数据，使用 TTL 抖动降低缓存雪崩风险。
+* **分布式限流**：使用 Redis Lua 脚本保证限流计数的原子性。
+* **可观测性与优雅关闭**：异步写入请求日志，并在进程退出时等待日志安全落库。
 
 ---
 
@@ -72,13 +56,13 @@
 **第一步：获取代码**
 
 ```bash
-git clone https://github.com/Neroxji/Go-LLM-Gateway.git
-cd Go-LLM-Gateway
+git clone https://github.com/Neroxji/Nerox-Gateway.git
+cd Nerox-Gateway
 ```
 
 **第二步：填写你自己的 API Key**
 
-编辑 `05-high-availability-cluster/config.json`，把 `keys` 换成自己的。并且可以自己尝试放很多不同的厂商的大模型😺
+复制 `configExample.json` 为 `config.json`，把 `keys` 换成自己的。可以配置多个 Provider 和 fallback 链路。
 
 ```json
 {

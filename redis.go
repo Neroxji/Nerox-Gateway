@@ -87,8 +87,8 @@ func setContentCache(ctx context.Context, req ChatRequest, content string) {
 	key := fmt.Sprintf("cache:content:%s", md5str)
 
 	// 3
-	jitter:=time.Duration(rand.Intn(10))*time.Minute
-	ttl:=1*time.Hour+jitter
+	jitter := time.Duration(rand.Intn(10)) * time.Minute
+	ttl := 1*time.Hour + jitter
 
 	// 4
 	err = RDB.Set(ctx, key, content, ttl).Err()
@@ -145,8 +145,8 @@ func setTokenCache(ctx context.Context, apiKey string, token Token) {
 	}
 
 	// 3
-	jitter:=time.Duration(rand.Intn(60))*time.Second
-	ttl:=5*time.Minute+jitter
+	jitter := time.Duration(rand.Intn(60)) * time.Second
+	ttl := 5*time.Minute + jitter
 
 	// 4
 	err = RDB.Set(ctx, key, tokenBytes, ttl).Err()
@@ -154,7 +154,7 @@ func setTokenCache(ctx context.Context, apiKey string, token Token) {
 		log.Printf("token redis set error:%s", err)
 		return
 	}
-	log.Printf("successfully set Token redis. apikey:%s",apiKey)
+	log.Printf("successfully set Token redis. apikey:%s", apiKey)
 }
 
 // delete Token
@@ -215,8 +215,8 @@ func setUserCache(ctx context.Context, ID uint, user User) {
 	}
 
 	// 3
-	jitter:=time.Duration(rand.Intn(60))*time.Second
-	ttl:=5*time.Minute+jitter
+	jitter := time.Duration(rand.Intn(60)) * time.Second
+	ttl := 5*time.Minute + jitter
 
 	// 4
 	err = RDB.Set(ctx, key, userBytes, ttl).Err()
@@ -259,7 +259,7 @@ func checkRateLimit(ctx context.Context, userID uint) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("Redis ratelimiting script fail:%w", err)
 	}
-	if count > 10{
+	if count > 10 {
 		return false, nil
 	}
 
