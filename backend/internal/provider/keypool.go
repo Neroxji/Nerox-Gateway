@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"log"
@@ -24,4 +24,8 @@ func (p *KeyPool) GetNextKey() string {
 	current := atomic.AddUint64(&p.index, 1)
 	index := (current - 1) % uint64(len(p.keys))
 	return p.keys[index]
+}
+
+func (p *KeyPool) Len() int {
+	return len(p.keys)
 }

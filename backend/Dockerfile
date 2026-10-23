@@ -15,7 +15,7 @@ RUN go mod download
 COPY . .
 
 # CGO_ENABLED=0: 禁用 CGO，确保编译出静态链接的二进制文件，方便在 alpine 中运行
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o aigateway .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o aigateway ./cmd/aigateway
 
 
 # 2

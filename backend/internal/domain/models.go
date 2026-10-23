@@ -1,8 +1,6 @@
-package main
+package domain
 
-import (
-	"time"
-)
+import "time"
 
 // 发给大模型的请求体
 type ChatRequest struct {

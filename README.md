@@ -62,7 +62,7 @@ cd Nerox-Gateway
 
 **第二步：填写你自己的 API Key**
 
-复制 `configExample.json` 为 `config.json`，把 `keys` 换成自己的。可以配置多个 Provider 和 fallback 链路。
+复制 `backend/configExample.json` 为 `backend/config.json`，把 `keys` 换成自己的。可以配置多个 Provider 和 fallback 链路。
 
 ```json
 {
@@ -91,15 +91,14 @@ DSN: "root:你的密码@tcp(mysql:3306)/ai_gateway?..."
 **第四步：构建 & 启动**
 
 ```bash
-docker build -t aigateway:v1.0 .
-docker-compose up -d
+docker compose up -d --build
 ```
 
 第一次会拉基础镜像，稍微等一下。跑完之后：
 
 ```bash
-docker-compose ps        # 三个容器都是 Up 就说明正常
-docker-compose logs app  # 看有没有报错
+docker compose ps        # 三个容器都是 Up 就说明正常
+docker compose logs app  # 看有没有报错
 ```
 
 服务启动后监听 `http://localhost:8080`。
@@ -107,13 +106,26 @@ docker-compose logs app  # 看有没有报错
 **停止服务**
 
 ```bash
-docker-compose down          # 停止，数据保留
-docker-compose down -v       # 停止并清掉数据库数据
+docker compose down          # 停止，数据保留
+docker compose down -v       # 停止并清掉数据库数据
 ```
 
 ---
 
-> config.json 是通过 volume 挂载进容器的，修改 API Key 后直接 `docker-compose restart app` 生效，不需要重新 build 镜像。
+> `backend/config.json` 是通过 volume 挂载进容器的，修改 API Key 后直接 `docker compose restart app` 生效，不需要重新 build 镜像。
+
+## 📁 项目结构
+
+```text
+backend/
+├── cmd/aigateway/       # 进程入口与生命周期管理
+└── internal/
+    ├── config/          # 配置加载
+    ├── domain/          # 请求、响应与持久化模型
+    ├── provider/        # Provider 请求与 API Key 池
+    ├── storage/         # MySQL、Redis 与异步日志
+    └── httpapi/         # Gin 路由、中间件和接口处理器
+```
 
 ---
 
