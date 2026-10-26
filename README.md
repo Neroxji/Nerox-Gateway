@@ -79,13 +79,13 @@ cd Nerox-Gateway
 }
 ```
 
-**第三步：按需修改密码（可选）**
+**第三步：注入本地运行密钥（必填）**
 
-`docker-compose.yml` 里默认密码是 `123456`，自己部署的话改一下，两处要一致：
+Compose 不再提供默认数据库密码。启动前设置数据库密码和管理接口密钥：
 
-```yaml
-MYSQL_ROOT_PASSWORD: 你的密码
-DSN: "root:你的密码@tcp(mysql:3306)/ai_gateway?..."
+```bash
+export MYSQL_ROOT_PASSWORD='替换成随机强密码'
+export ADMIN_API_KEY='替换成独立的管理员密钥'
 ```
 
 **第四步：构建 & 启动**
@@ -137,6 +137,7 @@ backend/
 
 ```
 POST http://localhost:8080/admin/users/create
+Authorization: Bearer <ADMIN_API_KEY>
 Content-Type: application/json
 ```
 
@@ -169,6 +170,7 @@ Content-Type: application/json
 
 ```
 POST http://localhost:8080/admin/tokens/create
+Authorization: Bearer <ADMIN_API_KEY>
 Content-Type: application/json
 ```
 
@@ -233,6 +235,16 @@ Content-Type: application/json
 
 ```
 DELETE http://localhost:8080/admin/users/:id
+Authorization: Bearer <ADMIN_API_KEY>
 ```
 
 把 `:id` 替换成具体的用户 ID，例如 `/admin/users/1`。执行后该用户的 Token 将无法继续使用。
+
+### 撤销 Token
+
+```
+DELETE http://localhost:8080/admin/tokens/:id
+Authorization: Bearer <ADMIN_API_KEY>
+```
+
+把 `:id` 替换成创建 Token 时返回的 `token_id`。撤销后该 Token 立即失效。

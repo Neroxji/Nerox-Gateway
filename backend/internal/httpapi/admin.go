@@ -1,15 +1,16 @@
 package httpapi
 
 import (
-	"fmt"
 	"log"
-	"math/rand"
 	"strconv"
 	"time"
 
 	"aigateway/internal/domain"
+	"aigateway/internal/security"
 	"github.com/gin-gonic/gin"
 )
+
+const defaultTokenTTL = 90 * 24 * time.Hour
 
 func (s *Server) DeleteUserHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -81,11 +82,18 @@ func (s *Server) CreateTokenHandler() gin.HandlerFunc {
 		if name == "" {
 			name = "默认密钥"
 		}
+		rawToken, err := security.GenerateToken()
+		if err != nil {
+			log.Printf("token generation failed: %s", err)
+			c.JSON(500, gin.H{"error": "something wrong with token generation"})
+			return
+		}
 		token := domain.Token{
-			UserID:   req.UserID,
-			Name:     name,
-			TokenKey: fmt.Sprintf("sk-%s%d", strconv.FormatInt(rand.New(rand.NewSource(time.Now().UnixNano())).Int63(), 36), time.Now().Unix()),
-			Status:   1,
+			UserID:    req.UserID,
+			Name:      name,
+			TokenHash: security.HashToken(rawToken),
+			Status:    1,
+			ExpiresAt: time.Now().Add(defaultTokenTTL),
 		}
 		if err := s.Database.CreateToken(&token); err != nil {
 			log.Printf("database operation failed: %s", err)
@@ -96,7 +104,31 @@ func (s *Server) CreateTokenHandler() gin.HandlerFunc {
 		c.JSON(200, gin.H{
 			"message":   "create token successfully!",
 			"token_id":  token.ID,
-			"token_key": token.TokenKey,
+			"token_key": rawToken,
 		})
+	}
+}
+
+func (s *Server) RevokeTokenHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "Invalid ID format. ID must be a positive integer!"})
+			return
+		}
+
+		token, revoked, err := s.Database.RevokeToken(uint(id))
+		if err != nil {
+			log.Printf("database operation failed: %s", err)
+			c.JSON(500, gin.H{"error": "something wrong with my database"})
+			return
+		}
+		if !revoked {
+			c.JSON(404, gin.H{"error": "this token does not exist !?"})
+			return
+		}
+
+		s.Cache.DeleteTokenHash(c.Request.Context(), token.TokenHash)
+		c.JSON(200, gin.H{"message": "revoke token successfully!"})
 	}
 }

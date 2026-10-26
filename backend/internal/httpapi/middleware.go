@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
-	"log"
 	"net/http"
+	"time"
 
+	"aigateway/internal/security"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -12,7 +15,7 @@ import (
 func CorsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Headers", "Content-Type")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -21,10 +24,21 @@ func CorsMiddleware() gin.HandlerFunc {
 	}
 }
 
+func (s *Server) AdminAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		provided, ok := security.ParseBearerToken(c.GetHeader("Authorization"))
+		if !ok || s.AdminAPIKey == "" || !sameSecret(provided, s.AdminAPIKey) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func (s *Server) AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		apiKey := c.GetHeader("Authorization")
-		if apiKey == "" {
+		apiKey, ok := security.ParseBearerToken(c.GetHeader("Authorization"))
+		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "缺少apiKey!"})
 			return
 		}
@@ -42,6 +56,11 @@ func (s *Server) AuthMiddleware() gin.HandlerFunc {
 				return
 			}
 			s.Cache.SetToken(c.Request.Context(), apiKey, token)
+		}
+		if token.Status != 1 || (!token.ExpiresAt.IsZero() && !time.Now().Before(token.ExpiresAt)) {
+			s.Cache.DeleteToken(c.Request.Context(), apiKey)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "apiKey 已失效!"})
+			return
 		}
 
 		user, hit := s.Cache.GetUser(c.Request.Context(), token.UserID)
@@ -69,7 +88,12 @@ func (s *Server) AuthMiddleware() gin.HandlerFunc {
 
 		c.Set("currentToken", token)
 		c.Set("currentUser", user)
-		log.Println("store user,token")
 		c.Next()
 	}
+}
+
+func sameSecret(provided, expected string) bool {
+	providedHash := sha256.Sum256([]byte(provided))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
 }

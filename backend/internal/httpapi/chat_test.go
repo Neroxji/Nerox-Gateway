@@ -56,13 +56,9 @@ func BenchmarkChatHandler_CacheHit(b *testing.B) {
 		for pb.Next() {
 			req := httptest.NewRequest("POST", "/api/v1/chat", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "sk-test-token")
+			req.Header.Set("Authorization", "Bearer sk-test-token")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, req)
 		}
 	})
-}
-
-func loadTestDSN() string {
-	return "root:123456@tcp(127.0.0.1:3306)/aigateway_test?charset=utf8mb4&parseTime=True&loc=Local"
 }

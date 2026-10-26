@@ -1,15 +1,13 @@
-version: '3.8'
-
 services:
   # MySQL
   mysql:
     image: mysql:8.0
     container_name: aigateway-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}"
       MYSQL_DATABASE: ai_gateway          
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -23,7 +21,7 @@ services:
     image: redis:7-alpine
     container_name: aigateway-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
 
@@ -37,7 +35,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DSN: "root:123456@tcp(mysql:3306)/ai_gateway?charset=utf8mb4&parseTime=True&loc=Local"
+      DSN: "root:${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}@tcp(mysql:3306)/ai_gateway?charset=utf8mb4&parseTime=True&loc=Local"
+      ADMIN_API_KEY: "${ADMIN_API_KEY:?ADMIN_API_KEY must be set}"
       REDIS_HOST: "redis:6379"
     volumes:
       - ./backend/config.json:/app/config.json:ro

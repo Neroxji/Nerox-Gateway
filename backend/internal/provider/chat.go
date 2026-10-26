@@ -91,6 +91,6 @@ func writeStreamError(w http.ResponseWriter, flusher http.Flusher, message, code
 	errMsg.Error.Code = code
 	errBytes, _ := json.Marshal(errMsg)
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(errBytes))
-	_, _ = fmt.Fprintln(w, "data: [DONE]\n")
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }

@@ -86,9 +86,10 @@ type Token struct {
 	ID        uint   `gorm:"primarykey"`
 	UserID    uint   `gorm:"index;not null"`
 	Name      string `gorm:"size:50;default:'默认密钥'"`
-	TokenKey  string `gorm:"uniqueIndex;size:100;not null"`
+	TokenHash string `gorm:"uniqueIndex;size:64;not null" json:"-"`
 	Status    int    `gorm:"default:1"`
 	CreatedAt time.Time
+	ExpiresAt time.Time `gorm:"index;not null"`
 }
 
 // 数据库日志

@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
 	"aigateway/internal/domain"
+	"aigateway/internal/security"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormLogger "gorm.io/gorm/logger"
 )
 
 type Database struct {
@@ -18,7 +21,14 @@ type Database struct {
 }
 
 func OpenDatabase(dsn string) (*Database, error) {
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger: gormLogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormLogger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  gormLogger.Warn,
+			IgnoreRecordNotFoundError: true,
+			ParameterizedQueries:      true,
+		}),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("连接 MySQL 失败: %w", err)
 	}
@@ -31,8 +41,14 @@ func OpenDatabase(dsn string) (*Database, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
+	if err := migrateLegacyTokenSchema(db); err != nil {
+		return nil, fmt.Errorf("迁移 Token 表失败: %w", err)
+	}
 	if err := db.AutoMigrate(&domain.User{}, &domain.RequestLog{}, &domain.Token{}); err != nil {
 		return nil, fmt.Errorf("自动建表失败: %w", err)
+	}
+	if err := dropLegacyTokenColumn(db); err != nil {
+		return nil, fmt.Errorf("清理旧 Token 明文列失败: %w", err)
 	}
 
 	return &Database{
@@ -43,7 +59,7 @@ func OpenDatabase(dsn string) (*Database, error) {
 
 func (db *Database) FindToken(apiKey string) (domain.Token, error) {
 	var token domain.Token
-	result := db.DB.Where("token_key=? AND status=?", apiKey, 1).First(&token)
+	result := db.DB.Where("token_hash=? AND status=? AND expires_at>?", security.HashToken(apiKey), 1, time.Now()).First(&token)
 	return token, result.Error
 }
 
@@ -67,9 +83,98 @@ func (db *Database) CreateToken(token *domain.Token) error {
 	return db.DB.Create(token).Error
 }
 
+func (db *Database) RevokeToken(id uint) (domain.Token, bool, error) {
+	var token domain.Token
+	result := db.DB.Where("id=? AND status=?", id, 1).First(&token)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return domain.Token{}, false, nil
+	}
+	if result.Error != nil {
+		return domain.Token{}, false, result.Error
+	}
+
+	result = db.DB.Model(&domain.Token{}).
+		Where("id=? AND status=?", id, 1).
+		Update("status", 0)
+	if result.Error != nil {
+		return domain.Token{}, false, result.Error
+	}
+	return token, result.RowsAffected > 0, nil
+}
+
 func (db *Database) DeactivateUser(id uint) (bool, error) {
 	result := db.DB.Model(&domain.User{}).Where("id=?", id).Update("status", false)
 	return result.RowsAffected > 0, result.Error
+}
+
+func migrateLegacyTokenSchema(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&domain.Token{}) {
+		return nil
+	}
+
+	hasHash, err := hasTokenColumn(db, "token_hash")
+	if err != nil {
+		return err
+	}
+	if !hasHash {
+		if err := db.Exec("ALTER TABLE tokens ADD COLUMN token_hash VARCHAR(64) NULL").Error; err != nil {
+			return err
+		}
+	}
+
+	hasExpiry, err := hasTokenColumn(db, "expires_at")
+	if err != nil {
+		return err
+	}
+	if !hasExpiry {
+		if err := db.Exec("ALTER TABLE tokens ADD COLUMN expires_at DATETIME NULL").Error; err != nil {
+			return err
+		}
+	}
+
+	hasLegacyKey, err := hasTokenColumn(db, "token_key")
+	if err != nil {
+		return err
+	}
+	if hasLegacyKey {
+		if err := db.Exec("UPDATE tokens SET token_hash=SHA2(token_key,256) WHERE token_hash IS NULL OR token_hash='' ").Error; err != nil {
+			return err
+		}
+		if err := db.Exec("UPDATE tokens SET expires_at=DATE_ADD(created_at, INTERVAL 90 DAY) WHERE expires_at IS NULL").Error; err != nil {
+			return err
+		}
+	}
+
+	var missing int64
+	if err := db.Raw("SELECT COUNT(*) FROM tokens WHERE token_hash IS NULL OR token_hash='' OR expires_at IS NULL").Scan(&missing).Error; err != nil {
+		return err
+	}
+	if missing > 0 {
+		return fmt.Errorf("存在 %d 条无法迁移的 Token 记录", missing)
+	}
+	return nil
+}
+
+func dropLegacyTokenColumn(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&domain.Token{}) {
+		return nil
+	}
+	hasLegacyKey, err := hasTokenColumn(db, "token_key")
+	if err != nil || !hasLegacyKey {
+		return err
+	}
+	return db.Exec("ALTER TABLE tokens DROP COLUMN token_key").Error
+}
+
+func hasTokenColumn(db *gorm.DB, column string) (bool, error) {
+	var count int64
+	err := db.Raw(`
+		SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE()
+		  AND table_name = 'tokens'
+		  AND column_name = ?`, column).Scan(&count).Error
+	return count > 0, err
 }
 
 func (db *Database) DeductBalance(userID uint, cost int64) error {

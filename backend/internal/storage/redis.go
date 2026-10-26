@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aigateway/internal/domain"
+	"aigateway/internal/security"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -93,13 +94,26 @@ func (c *Cache) SetToken(ctx context.Context, apiKey string, token domain.Token)
 		return
 	}
 	ttl := 5*time.Minute + time.Duration(rand.Intn(60))*time.Second
+	if !token.ExpiresAt.IsZero() {
+		remaining := time.Until(token.ExpiresAt)
+		if remaining <= 0 {
+			return
+		}
+		if remaining < ttl {
+			ttl = remaining
+		}
+	}
 	if err := c.Client.Set(ctx, tokenKey(apiKey), value, ttl).Err(); err != nil {
 		log.Printf("token redis set error: %s", err)
 	}
 }
 
 func (c *Cache) DeleteToken(ctx context.Context, apiKey string) {
-	if err := c.Client.Del(ctx, tokenKey(apiKey)).Err(); err != nil {
+	c.DeleteTokenHash(ctx, security.HashToken(apiKey))
+}
+
+func (c *Cache) DeleteTokenHash(ctx context.Context, tokenHash string) {
+	if err := c.Client.Del(ctx, tokenHashKey(tokenHash)).Err(); err != nil {
 		log.Printf("token redis delete error: %s", err)
 	}
 }
@@ -168,7 +182,11 @@ func contentKey(req domain.ChatRequest) (string, error) {
 }
 
 func tokenKey(apiKey string) string {
-	return "cache:token:" + md5Hex(apiKey)
+	return tokenHashKey(security.HashToken(apiKey))
+}
+
+func tokenHashKey(tokenHash string) string {
+	return "cache:token:" + tokenHash
 }
 
 func userKey(id uint) string {

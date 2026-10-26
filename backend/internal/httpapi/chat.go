@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,19 +18,21 @@ import (
 )
 
 type Server struct {
-	Config   *config.Config
-	Database *storage.Database
-	Cache    *storage.Cache
-	Client   http.Client
+	Config      *config.Config
+	Database    *storage.Database
+	Cache       *storage.Cache
+	Client      http.Client
+	AdminAPIKey string
 }
 
 func NewServer(cfg *config.Config, database *storage.Database, cache *storage.Cache) *Server {
 	transport := &http.Transport{ResponseHeaderTimeout: 5 * time.Second}
 	return &Server{
-		Config:   cfg,
-		Database: database,
-		Cache:    cache,
-		Client:   http.Client{Transport: transport},
+		Config:      cfg,
+		Database:    database,
+		Cache:       cache,
+		Client:      http.Client{Transport: transport},
+		AdminAPIKey: os.Getenv("ADMIN_API_KEY"),
 	}
 }
 
@@ -41,9 +44,11 @@ func (s *Server) Register(router *gin.Engine) {
 	v1.POST("/chat", s.ChatHandler())
 
 	admin := router.Group("/admin")
+	admin.Use(s.AdminAuthMiddleware())
 	admin.DELETE("/users/:id", s.DeleteUserHandler())
 	admin.POST("/users/create", s.CreateUserHandler())
 	admin.POST("/tokens/create", s.CreateTokenHandler())
+	admin.DELETE("/tokens/:id", s.RevokeTokenHandler())
 }
 
 func (s *Server) ChatHandler() gin.HandlerFunc {

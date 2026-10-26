@@ -1,3 +1,5 @@
 backend/config.json
+.env
+.env.*
 
 .DS_Store

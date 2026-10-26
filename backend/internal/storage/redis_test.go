@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"aigateway/internal/domain"
@@ -24,6 +26,21 @@ func TestCheckRateLimit(t *testing.T) {
 		if _, err := cache.CheckRateLimit(ctx, 9999); err != nil {
 			t.Fatalf("第 %d 次调用出错: %v", i, err)
 		}
+	}
+}
+
+func TestTokenCacheDoesNotExposeRawToken(t *testing.T) {
+	rawToken := "sk-test-token-value"
+	token := domain.Token{ID: 1, UserID: 1, TokenHash: "hash-only"}
+	value, err := json.Marshal(token)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(value), rawToken) {
+		t.Fatalf("cache payload contains raw token: %s", value)
+	}
+	if strings.Contains(tokenKey(rawToken), rawToken) {
+		t.Fatalf("cache key contains raw token: %s", tokenKey(rawToken))
 	}
 }
 

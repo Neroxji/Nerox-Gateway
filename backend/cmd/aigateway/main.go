@@ -24,12 +24,22 @@ func main() {
 		log.Fatal("读取配置文件失败:", err)
 	}
 
-	for i := range cfg.Providers {
-		cfg.Providers[i].Pool = provider.NewKeyPool(cfg.Providers[i].Keys)
-	}
 	if dsn := os.Getenv("DSN"); dsn != "" {
 		cfg.DSN = dsn
 		log.Println("使用环境变量 DSN")
+	}
+	if cfg.DSN == "" {
+		log.Fatal("DSN 环境变量或配置文件是必需的")
+	}
+	if os.Getenv("ADMIN_API_KEY") == "" {
+		log.Fatal("ADMIN_API_KEY 环境变量是必需的")
+	}
+	if err := cfg.ValidateProviderURLs(os.Getenv("ALLOW_INSECURE_PROVIDER_HTTP") == "1"); err != nil {
+		log.Fatal("Provider 配置无效:", err)
+	}
+
+	for i := range cfg.Providers {
+		cfg.Providers[i].Pool = provider.NewKeyPool(cfg.Providers[i].Keys)
 	}
 
 	database, err := storage.OpenDatabase(cfg.DSN)

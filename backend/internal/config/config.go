@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 
 	"aigateway/internal/provider"
@@ -44,6 +46,23 @@ func (c *Config) FindProvider(targetName string) *Provider {
 		if c.Providers[i].Name == targetName {
 			return &c.Providers[i]
 		}
+	}
+	return nil
+}
+
+func (c *Config) ValidateProviderURLs(allowInsecureHTTP bool) error {
+	for _, provider := range c.Providers {
+		parsed, err := url.Parse(provider.Url)
+		if err != nil || parsed.Host == "" {
+			return fmt.Errorf("provider %q has an invalid URL", provider.Name)
+		}
+		if parsed.Scheme == "https" {
+			continue
+		}
+		if allowInsecureHTTP && parsed.Scheme == "http" {
+			continue
+		}
+		return fmt.Errorf("provider %q must use HTTPS", provider.Name)
 	}
 	return nil
 }
