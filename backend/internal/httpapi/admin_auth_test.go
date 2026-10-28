@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +39,9 @@ func TestAdminAuthMiddlewareRequiresConfiguredBearerKey(t *testing.T) {
 			if response.Code != tt.want {
 				t.Fatalf("status = %d; want %d", response.Code, tt.want)
 			}
+			if strings.Contains(response.Body.String(), server.AdminAPIKey) {
+				t.Fatalf("response contains the admin API key")
+			}
 		})
 	}
 }
@@ -55,6 +59,7 @@ func TestRegisterAdminRoutesRejectUnauthorizedRequests(t *testing.T) {
 		{method: http.MethodPost, path: "/admin/users/create"},
 		{method: http.MethodPost, path: "/admin/tokens/create"},
 		{method: http.MethodDelete, path: "/admin/users/1"},
+		{method: http.MethodDelete, path: "/admin/tokens/1"},
 	}
 	authHeaders := []string{"", "Bearer wrong-admin", "Bearer sk-user-token"}
 

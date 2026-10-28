@@ -4,8 +4,9 @@
 
 - 实验编号：N1
 - 实验名称：管理接口与密钥安全边界
-- 执行时间：
-- 代码版本：git 69a9c20（backend 无未提交修改；docs/experiments 有未提交文档变更）
+- 完成状态：已完成（修复及自动化复验）
+- 执行时间：2026-10-28
+- 代码版本：安全修复提交 `79ed0fc`；测试和结果记录纳入 N1 完成提交。
 - 环境：Windows 10（10.0.26200）+ Docker Desktop 29.7.2 / Compose v5.4.0（WSL2，20 核 / 16GB）；mysql 8.0.46（healthy）、redis 7.4.11、app 镜像 aigateway:v1.0（golang:1.26-alpine 构建，Up）；网关地址 http://127.0.0.1:8080
 
 ### 想验证的问题：
@@ -74,4 +75,19 @@
 
   替代方案：把 `/admin` 完全放到内网或反向代理后，仅允许 VPN、mTLS 或企业 SSO 访问，应用不再自己验证管理员密钥。这个方案依赖额外基础设施，不能单独解决 Token 明文存储和配置进入镜像的问题，因此本实验优先采用应用内管理员凭证方案。
 
+### 自动化验收测试状态：
+
+- 普通 Go 单测/API 测试：`go test -count=1 ./...` 已通过。
+- 静态和竞态检查：`go vet ./...`、`go vet -tags=integration ./...`、`go test -race -count=1 ./...` 已通过。
+- MySQL/Redis HTTP 生命周期集成测试：通过专用 MySQL 8.0 测试库和 Redis 7 测试 DB 执行，用户/Token 创建、Token 认证、撤销、过期、禁用用户及 Provider 调用边界均通过。
+- MySQL 迁移集成测试：旧 `token_key` 表迁移、生成哈希和过期时间、删除明文列均通过。
+- Redis Token 集成测试：实际缓存读写、明文排除、TTL 和撤销删除均通过。
+- 集成测试编译与静态检查：`go test -tags=integration -run '^$' ./...`、`go vet -tags=integration ./...` 已通过。
+- Compose 密钥、端口绑定和 `.dockerignore` 检查：`backend/tests/deployment_boundary_checks.sh` 已通过。
+- Docker 镜像已构建；最终镜像文件和镜像历史检查通过，未发现运行时配置、环境文件、证书/私钥或测试密钥。
+- 尚未执行运行中完整 Gateway 的日志检索；没有真实 Provider 调用。
+
 ### 实验局限：
+
+- 当前未连接真实 Provider，只使用 Fake Provider 测试调用次数和调用边界。
+- Docker 镜像检查已完成，但运行中的完整 Gateway 日志检索仍未执行。
