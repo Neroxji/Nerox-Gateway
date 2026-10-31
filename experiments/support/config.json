@@ -1,0 +1,31 @@
+{
+  "providers": [
+    {
+      "name": "fake-primary",
+      "url": "http://fakeprovider:8081/primary/chat/completions",
+      "model": "fake-primary-model",
+      "keys": [
+        "fake-primary-key-1",
+        "fake-primary-key-2"
+      ],
+      "price_per_k": 1
+    },
+    {
+      "name": "fake-fallback",
+      "url": "http://fakeprovider:8081/fallback/chat/completions",
+      "model": "fake-fallback-model",
+      "keys": [
+        "fake-fallback-key-1",
+        "fake-fallback-key-2"
+      ],
+      "price_per_k": 1
+    }
+  ],
+  "fallbacks": {
+    "e1-model": [
+      "fake-primary",
+      "fake-fallback"
+    ]
+  },
+  "DSN": ""
+}

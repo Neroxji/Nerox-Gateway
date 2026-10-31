@@ -80,7 +80,7 @@
 
 - 实验记录写入 `docs/experiments/results/`，命名如 `E01-fake-provider.md`、`N1-admin-security.md`，首次执行时从 4.2 模板复制。
 - 每个实验的可重跑脚本（客户端、故障注入、观测采集）放入 `docs/experiments/scripts/`。完成标准要求“能稳定复现、修复后重复实验”，不脚本化就无法低成本满足，因此脚本属于实验交付物。
-- Fake Provider 实现放 `backend/cmd/fakeprovider`。
+- Fake Provider 和实验运行时底座放 `experiments/support/`，与正常 Gateway 的 `backend/` 和根目录 Compose 文件分开。
 
 **时间预算**
 
@@ -93,8 +93,8 @@
 | 实验 | 状态 | 日期 | 结果文档 |
 |---|---|---|---|
 | N1 | 已完成（修复及自动化复验） | 2026-10-28 | [N1-admin-security.md](results/N1-admin-security.md) |
-| E1 | 未开始 | | |
-| E13 | 未开始 | | |
+| E1 | 已完成（E1-01~E1-09） | 2026-10-28 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
+| E13 | 进行中（顺序延迟基线已完成，未测并发和资源） | 2026-10-30 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
 | E2 | 未开始 | | |
 | E9 | 未开始 | | |
 | E10 | 未开始 | | |
@@ -278,7 +278,7 @@ admin 鉴权修复后，后续实验脚本（例如 E12 通过管理接口禁用
 
 **需要修改什么**
 
-增加独立 Fake Provider，实现放在 `backend/cmd/fakeprovider`，复用现有 Go module，场景由请求参数或环境变量控制。第一轮不修改 Gateway 业务逻辑，只把 Provider URL 指向本地服务。Fake Provider 至少支持：
+增加独立 Fake Provider，实现放在 `experiments/support/fakeprovider`，由实验专用 Compose 栈启动，场景由控制接口配置。第一轮不修改 Gateway 业务逻辑，只把 Provider URL 指向本地服务。Fake Provider 至少支持：
 
 - 正常响应。
 - 响应头延迟。
@@ -1349,4 +1349,4 @@ Provider 变慢、请求涌入、数据库连接池等待和重试叠加后，�
 - [x] Redis 持久化对限流计数和缓存的影响并入 E4；复制、哨兵维持第 8 节排除。
 - [x] 只观察、不改业务代码为默认原则；允许立即做最小修复的仅四处——N1（admin 鉴权）、E2（取消错误分类）、E7（dropped counter 和队列指标）、E13（观测入口），其余实验的修复一律进独立分支。
 - [x] 实验记录放 `docs/experiments/results/`，脚本放 `docs/experiments/scripts/`，见 3.2。
-- [x] Fake Provider 放 `backend/cmd/fakeprovider`，见 E1。
+- [x] Fake Provider 放 `experiments/support/fakeprovider`，见 E1。
