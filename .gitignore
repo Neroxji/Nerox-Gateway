@@ -3,3 +3,5 @@ backend/config.json
 .env.*
 
 .DS_Store
+experiments/support/e13-tokens.txt
+*.exe

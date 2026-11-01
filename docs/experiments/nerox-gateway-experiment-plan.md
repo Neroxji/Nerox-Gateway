@@ -94,7 +94,7 @@
 |---|---|---|---|
 | N1 | 已完成（修复及自动化复验） | 2026-10-28 | [N1-admin-security.md](results/N1-admin-security.md) |
 | E1 | 已完成（E1-01~E1-09） | 2026-10-28 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
-| E13 | 进行中（顺序延迟基线已完成，未测并发和资源） | 2026-10-30 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
+| E13 | 进行中（全部观测完成；余变体【暂缓】、迁移结论） | 2026-11-01 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
 | E2 | 未开始 | | |
 | E9 | 未开始 | | |
 | E10 | 未开始 | | |

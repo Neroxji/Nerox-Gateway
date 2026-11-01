@@ -1,7 +1,7 @@
 # 阶段 1：可控上游和测量基线
 
 > 实验编号：E1 + E13
-> 状态：E1-01~E1-09 已执行，E13 执行中（顺序延迟基线已完成，未测并发和资源）
+> 状态：E1-01~E1-09 已执行，E13 执行中（全部观测完成：顺序+并发基线、profile、race/bench/RTT/heap；余变体【暂缓】、迁移结论）
 > 关联计划：`docs/experiments/nerox-gateway-experiment-plan.md`
 > 执行顺序：先完成 E1，再用 E1 已验证的正常场景完成 E13
 
@@ -537,9 +537,115 @@ E13-06 限流拒绝顺序延迟（20 样本）：
   MySQL/余额：没有新增 request_logs；余额保持 `99960`。
   结论：限流拒绝路径只经过 Gateway 的限流检查和 429 响应，不解析缓存、不访问 Provider、不扣费。预置 Redis 计数是实验准备动作，不代表正常业务请求流程。
 
-附带观测：`GET /debug/pprof/` 返回 HTTP 404；当前 Gin 服务没有注册 pprof 路由。本项只记录，不在本轮修复。
+附带观测：`GET /debug/pprof/` 返回 HTTP 404；当前 Gin 服务没有注册 pprof 路由。本项只记录，不在本轮修复。（2026-10-31 已作为 E13-07 最小修复并复验，见下）
 
-暂未测：并发吞吐、并发错误率、CPU、heap/allocs/GC、goroutine、block profile、Redis RTT、MySQL 连接池和 race。以上 P50/P95/P99 仅来自 20 个顺序样本。
+暂未测（2026-11-01 更新）：go test -race、go test -bench 复验、Redis RTT、MySQL 内部状态、heap profile 分析、block profile 有负载读取、计划外变体。P50/P95/P99 数据源：20 个顺序样本 + 17 轮×200 条突发样本。
+
+E13-07 诊断入口挂出（E13 允许的最小修复）与复验（2026-10-31）：
+  背景：`main.go` 导入 `net/http/pprof` 但 `DefaultServeMux` 从未被服务，`GET /debug/pprof/` 返回 404（见上方附带观测）。
+  环境说明：本日实验环境全新重建（原镜像、数据卷、本地凭据均不在），测试用户与 Token 经 admin 接口重建（user_id=1，余额 100000）。
+  修复内容：`main.go` 在独立端口 `:6060` 服务 `DefaultServeMux`（pprof + expvar），并发布 `db_pool`（`sql.DB.Stats()`）；
+  同时开启阻塞采样 `runtime.SetBlockProfileRate(1)`（Go 默认关闭，不开启则 block profile 恒为空）；
+  实验 compose 增加 `127.0.0.1:18082:6060` 映射，仅回环暴露。业务 gin router 与主路径代码不变。
+  修复前证据：`/debug/pprof/` 404、`/debug/vars` 404、宿主机 18082 无监听。
+  修复后：`/debug/pprof/` 200；`/debug/vars` 含 memstats、cmdline、db_pool（MaxOpen=100，Open=1，Idle=1，WaitCount=0）；
+  goroutine profile 空载 total 14。
+  主路径复验（同 E13-02 缓存命中场景）：
+    第 1 次唯一消息（未命中）：HTTP 200，TTFB 13.565ms；request_logs cache_hit=0、target_provider=fake-primary、total_tokens=3；余额 -1。
+    第 2 次原样重发（命中）：HTTP 200，TTFB 4.898ms，返回 `chatcmpl-cache` 与完整 `[DONE]`；request_logs cache_hit=1；Fake Provider 无新增调用；不扣费。
+    对比 E13-02（TTFB 14.634ms）：命中路径行为一致、延迟同量级，诊断端口对主路径无可观察影响。
+    goroutine 复验后 total 16，空载未见增长。
+  实验准备动作记录：清空 Fake Provider 统计；删除 `ratelimit:*` key（准备动作，非正常业务流程）。
+  定量预测：未做——首次建立基线前无法外推，本轮明确跳过；并发阶段是否补做由后续记录说明。
+  发现：容器内监听须绑 `:6060` 而非 `127.0.0.1:6060`，否则 Compose 端口映射无法转发到容器回环地址；对外隔离由 compose 的 `127.0.0.1` 发布地址保证。
+
+E13-08 并发基线矩阵（2026-11-01）：
+  工具：docs/experiments/scripts/e13_loadgen.go（-mode hit|miss|fallback|ratelimit，-c 并发，-n 请求数，
+  -tokens-file 多用户轮转，-csv 明细），编译为 e13_loadgen.exe 运行。
+  限流应对：单用户限流为硬编码 10 次/60 秒固定窗口（storage/redis.go:172），业务代码不可改；
+  建立 25 个测试用户（e13-u01~u25，各余额 100000）轮转 Token，轮间清空 ratelimit:*（准备动作）。
+  固定条件：model=e1-model；每轮 n=200 突发；hit 轮复用同一缓存内容，miss/fallback 每请求唯一内容；
+  ratelimit 轮预置 user1 当前窗口计数到 10。路径 x 并发（1/4/16/64）共 16 轮 + rl_c4 重跑 1 轮。
+  结果表（吞吐 req/s | TTFB P50/P95 ms | Total P50/P95 ms | goroutine 峰值 | WaitCount 峰值）：
+    hit c1     |  332 |  2.64/ 5.30 |  2.67/ 5.37 |  34 | 0
+    hit c4     | 1379 |  2.70/ 4.01 |  2.73/ 4.01 |  42 | 0
+    hit c16    | 2728 |  4.86/ 8.05 |  5.08/ 8.78 |  52 | 0
+    hit c64    | 1765 | 14.26/96.41 | 15.74/96.41 | 111 | 0
+    miss c1    |   88 |  4.08/ 6.06 | 10.98/15.72 |  35 | 0
+    miss c4    |  281 |  4.36/ 7.01 | 13.60/20.45 |  46 | 0
+    miss c16   |  737 |  8.05/14.80 | 20.95/28.45 |  52 | 0
+    miss c64   |  989 | 13.72/67.46 | 48.65/108.11| 203 | 0
+    fb   c1    | 78.7 |  5.50/ 8.37 | 12.05/17.28 |  41 | 0
+    fb   c4    |  265 |  6.00/ 8.78 | 14.42/20.89 |  45 | 0
+    fb   c16   |  637 |  9.88/22.25 | 24.36/33.17 |  72 | 0
+    fb   c64   |  880 | 21.75/70.20 | 63.87/126.95| 253 | 0
+    rl   c1    |  430 |  2.11/ 3.89 |  2.12/ 3.89 |  39 | 0
+    rl   c4    | 1389 |  2.63/ 4.10 |  2.63/ 4.59 |  42 | 0（重跑轮；首跑混入 9 个 200，见下）
+    rl   c16   | 2937 |  3.87/17.37 |  3.99/18.00 |  38 | 0
+    rl   c64   | 3383 | 13.80/54.13 | 13.88/54.13 |  38 | 0
+  关键读数：
+    1. hit 吞吐拐点在 c16（2728 req/s）：c64 并发×4 但吞吐反跌至 1765，且 P95 从 8ms 涨至 96ms
+       （P95/P50 比值从 1.6 变 6.8）——并发超过处理能力后排队，两信号同时出现。
+    2. miss/fallback 天花板为上游 I/O：TTFB(4ms) << Total(11ms)，差值是等上游流输出；
+       fallback 比 miss 慢一档（c1 79 vs 88），对应每请求多一次失败往返。
+    3. ratelimit 是最快路径（c64 3383 req/s）：不碰 Provider、不写库、不扣费。
+    4. goroutine 峰值 ≈ 15 + 1.5×并发；miss c64 达 203、fallback c64 达 253（每在途请求挂上游连接读写 goroutine）。
+    5. db_pool WaitCount 全程 0：池上限 100，负载最多用到 20 条连接，从未排队。
+       E8 观察连接池排队需先调小池子。
+    6. rl_c4 首跑出现 9 个 200：60 秒固定窗口在轮间翻页（计数随窗口滚动重置），重跑后干净。
+  Fake Provider 记账：miss 轮恰好 200 次调用/轮；fallback 轮 primary+fallback 各恰好 200 次/轮。
+
+E13-09 CPU profile（压测进行中采样，2026-11-01，主机 20 核）：
+  hit：      10s 窗口 Total samples 2.24s（≈1.1% CPU）；TOP：Syscall6 32% + futex 24%，
+             net/http 写路径累计 10.7%；业务函数（JSON/gin/日志）均 <1.5%。
+  miss：     15s 窗口 3.49s（≈1.2%）；形状相同，encoding/json 解码累计 3.7%。
+  fallback： 15s 窗口 4.50s（≈1.5%）；Syscall6 38% + futex 19%。
+  结论：该速率下网关为 I/O 型负载——CPU 近乎空闲（~1%）而吞吐到顶，CPU 花销集中在
+  网络系统调用与 goroutine 调度等待，不在计算。反事实：若为计算瓶颈，榜首应为
+  encoding/json 或 GC 函数占 40% 以上。未出现该形状。
+  （heap_hit/heap_miss/heap_fb 三份已于 E13-12 分析）
+
+E13-10 停载回落与账面对账（2026-11-01）：
+  停载 30 秒后 goroutine total=38（空载 15），逐条有归属：
+    20 = MySQL 空闲连接 watcher（连接池 1→20 条，SetMaxIdleConns(20) 的合法保温）
+    5  = 日志 worker（恒定）
+    ~6 = 上游 keep-alive 连接 readLoop/writeLoop（Transport 保温）
+    其余 = 信号等待、main、connectionOpener/Cleaner 等基线常驻
+  判断：无泄漏特征。泄漏的判据是"持续增长不封顶"，不是"必须回到初始值"。
+  db_pool：Open=20/Idle=20/InUse=0，MaxIdleClosed=131，WaitCount=0。
+  账面：request_logs 共 10072 条；cache:content key 4019 个；25 用户余额 99838~99975（分摊扣费）。
+  定量预测：未做（沿用 E13-07 的说明）。
+  实验局限：
+    - 负载形态为短促突发（受 250 条/60 秒窗口预算约束），非持续稳态；排队结论只覆盖突发场景
+    - 并发梯度止于 c64，更高并发未测
+    - Fake Provider 本身在链路内且为单实例，miss/fallback 吞吐含其处理时间
+    - gin debug 模式与每请求 stdout 日志计入测量（基线如实记录现状，不改）
+    - 未测：race、go test -bench、Redis RTT、MySQL 内部状态、heap 分析、block profile 有负载读取
+
+E13-11 race、benchmark 复验与 Redis RTT（2026-11-01）：
+  执行环境：golang:1.26-alpine 容器挂实验网络（Windows 宿主机跑 -race 需要 gcc，故容器内执行；
+  模块源 goproxy.cn，apk 经腾讯镜像装 gcc；MySQL 集成测试使用专用库 ai_gateway_test，不动实验数据）。
+  go test -race ./...：全部包 ok，退出码 0，未发现 DATA RACE。
+  （覆盖为测试套件全部用例；"-race 二进制 + 并发压测"加强版未做）
+  go test -bench -benchmem（GOMAXPROCS=20，默认 1s/项）：
+    BenchmarkCheckRateLimit       22.7µs/op   396 B/op  14 allocs/op
+    BenchmarkGetTokenCache_Hit   131.6µs/op   960 B/op  16 allocs/op
+    BenchmarkGetTokenCache_Miss  130.5µs/op   656 B/op  29 allocs/op
+    BenchmarkWriteCachedStream    6.6µs/op  3853 B/op  29 allocs/op
+  解读：缓存类操作耗时被 Redis 往返支配（Hit 与 Miss 几乎相等，都是一次往返）；
+  WriteCachedStream 纯内存 6.6µs，但 3853 B/op 偏高——每次写缓存流都重新分配缓冲。
+  Redis RTT（compose 网络内 redis-cli --latency，96 样本）：min 0 / max 2 / avg 0.46ms；
+  基准实测单次缓存操作 0.13ms（含一次 RTT + 编解码）——两种口径（连续 PING 循环 vs 热连接单操作）
+  均证明亚毫秒级。hit P50 2.6ms ≈ 4~6 次 Redis 往返（E13-08 的归因获得实测支撑）。
+
+E13-12 heap 分析（2026-11-01，heap_fb.out 快照，go tool pprof -top）：
+  inuse_space（负载后现占内存）：全进程 17.26MB；榜首为 bufio.NewWriterSize(3.2MB)/NewReaderSize(2.6MB)
+  ——连接读写缓冲（keep-alive 保温），无业务对象囤积，与 E13-10 goroutine 回落结论互证。
+  彩蛋：pprof.StartCPUProfile 占 1.18MB，CPU 采样自身缓冲也计入内存账。
+  alloc_space（进程启动以来累计 ~348MB）：bufio 三项合计 ~67MB 居首（每请求新建缓冲 +
+  Scanner 逐行扫上游 SSE），次为 json.Marshal、MIMEHeader——与 E13-11 benchmark 的
+  WriteCachedStream 3853 B/op 交叉指向同一嫌疑人："每请求缓冲不复用"。
+  两把独立尺子（微基准 / heap）指向一致，构成将来缓冲复用优化的完整证据链（本轮不改）。
 ```
 
 ## 完成标准
@@ -572,3 +678,62 @@ E13-06 限流拒绝顺序延迟（20 样本）：
 迁移到真实反向代理和第三方 Provider：
 本实验不能证明的内容：
 ```
+
+## 附录：性能测试方法论速查（E13 学习笔记）
+
+> 从 E13 全程提炼，供后续任何性能测试复用。测试清单不是背出来的，是从"程序最怕发生什么"推导出来的。
+
+### 矩阵一：三层观测框架（测什么）
+
+| 视角 | 回答什么 | 指标 | 实验/本机工具 | 生产对应物 | E13 实例 |
+|---|---|---|---|---|---|
+| 客户端 | 对外多快？何时排队？ | 吞吐、错误率、状态码分布、TTFB/Total 的 P50/P95/P99 | loadgen、hey、wrk | APM、网关监控 | hit 拐点 c16（2728 req/s） |
+| 进程 | 时间花在哪？资源涨没涨？ | goroutine 峰值/回落、heap/allocs/GC、连接池 WaitCount、CPU profile | pprof、expvar | 持续 profiler、Prometheus | Syscall6+futex≈55%，业务函数 <1.5% |
+| 系统 | 依赖和环境扛住没？ | 容器 CPU/内存、Redis RTT/命中率、MySQL 连接/慢查询 | docker stats、redis-cli、SHOW STATUS | 节点/DB 监控 | 本轮全空闲未成瓶颈，故无数据 |
+
+工具会换，三个问题永远不变（即 USE 法：每种资源看利用率/饱和度/错误）。
+不同实验往框架里加自己的列：E2 加 TCP/fd，E7 加队列长度/丢弃数，E8 加连接池等待明细。
+
+### 矩阵二：结论判读规则（怎么读）
+
+| 读法 | 操作 | 判读 | E13 实例 |
+|---|---|---|---|
+| 竖着比 | 同路径不同并发，看吞吐曲线 | 吞吐跌 + P95 暴涨同时出现 = 拐点/排队 | hit c64 反跌 |
+| 横着比 | 同并发不同路径，控制变量 | 差值 = 环节成本 | c64: rl 3383 > hit 1765 > miss 989 > fb 880 |
+| P95 ÷ P50 | 算比值 | >2~3 倍 = 排队/尾延迟问题 | c64 hit 达 6.8 |
+| TTFB vs Total | 算差值 | 差大 = 时间在等上游 | miss c1: 4ms vs 11ms |
+| 峰值 vs 回落 | 停载 30s 再采 | 持续增长不封顶 = 泄漏；逐条有归属的保温 = 正常 | 38 vs 15 |
+| CPU profile 榜首 | flat% 从大到小 | 业务函数大=算力型；syscall/futex 大=I/O 型；mallocgc/GC 大=分配型 | I/O 型 |
+| CPU 总忙度 | Total samples ÷（窗口×核数） | <5% 却吞吐到顶 = 等待型瓶颈 | 1.1% |
+
+### 矩阵三：实验设计规则（怎么测才可比）
+
+| 要素 | 规则 |
+|---|---|
+| 控制变量 | 一次只改一个变量（路径 × 并发），其余全部固定 |
+| 必须固定的项 | 请求体/响应内容、数据量、时长、用户集、软硬件版本、git commit |
+| 自变量梯度 | 并发阶梯（如 c=1/4/16/64），必须覆盖"不挤→开始挤→挤爆" |
+| 样本量 | P50 需几百，P99 需 ~1000+ 才稳；小样本只能作参考并注明 |
+| 基线绑定环境 | 数字只在同环境可比；换环境/改配置后须重测基线 |
+| 修复后复验 | 用同一场景重跑，记录修复前后差异，否则修复不算完成 |
+| 负载形态要声明 | 突发（burst）和持续（sustained）结论不可互相引用 |
+
+### 矩阵四：测试类型全景（从"怕什么"推导，超出性能范畴的补充）
+
+| 程序形状 | 最怕的事故 | 武器 | Go 里的用法 |
+|---|---|---|---|
+| 有逻辑分支 | 算错 | 单元测试 | `go test`（表驱动惯用法） |
+| 解析外部输入 | 被怪输入打崩 | fuzzing | `testing.F` |
+| 并发共享状态 | 数据竞争（偶发、难复现） | race 检测 | `go test -race`、`go build -race`（慢 5~10 倍，只查正确性） |
+| 有性能预算 | 悄悄变慢 | 微基准 + 基线 | `go test -bench`（纳秒/次、allocs/op） |
+| 依赖外部服务 | 挂了/变慢 | 故障注入 | 本实验计划的整体方法（E1/E4/…） |
+
+### E13 沉淀的标准作业卡（以后性能测试照此执行）
+
+1. 定路径：识别要测的代码路径（如缓存命中/回源/拒绝/切换）
+2. 定负载：突发还是持续、并发梯度、每档样本量
+3. 定控制变量：固定项清单 + 每轮的准备动作（如清限流 key）
+4. 写定量预测（跑前）
+5. 三层同时采：客户端计时 + 进程 profile + 系统侧状态
+6. 按矩阵二判读，写出"证据 → 结论"链
+7. 归档：结果表 + 环境说明 + 局限声明，基线表供后续实验对照
