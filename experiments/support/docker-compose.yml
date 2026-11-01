@@ -43,6 +43,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:18080:8080"
+      - "127.0.0.1:18082:6060"
     environment:
       DSN: "root:${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}@tcp(mysql:3306)/ai_gateway?charset=utf8mb4&parseTime=True&loc=Local"
       ADMIN_API_KEY: "${ADMIN_API_KEY:?ADMIN_API_KEY must be set}"

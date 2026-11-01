@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"expvar"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -58,6 +60,23 @@ func main() {
 	router := gin.Default()
 	server := httpapi.NewServer(cfg, database, cache)
 	server.Register(router)
+
+	// 诊断入口：pprof 和 expvar 注册在 DefaultServeMux 上，业务 gin router 不承载。
+	// 容器内绑 :6060（绑 127.0.0.1 会使 Compose 端口映射无法转发到容器回环），
+	// 对外仅通过 Compose 发布的 127.0.0.1 地址访问。
+	// 阻塞 profile 默认关闭（采样率为 0），必须显式开启，否则 /debug/pprof/block 采不到数据。
+	runtime.SetBlockProfileRate(1)
+	if sqlDB, err := database.DB.DB(); err == nil {
+		expvar.Publish("db_pool", expvar.Func(func() any { return sqlDB.Stats() }))
+	} else {
+		log.Printf("db_pool 指标不可用: %s", err)
+	}
+	diagServer := &http.Server{Addr: ":6060", ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := diagServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("诊断端口启动失败: %s", err)
+		}
+	}()
 
 	serverHTTP := &http.Server{Addr: ":8080", Handler: router}
 	go func() {
