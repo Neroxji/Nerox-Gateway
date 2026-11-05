@@ -648,6 +648,105 @@ E13-12 heap 分析（2026-11-01，heap_fb.out 快照，go tool pprof -top）：
   两把独立尺子（微基准 / heap）指向一致，构成将来缓冲复用优化的完整证据链（本轮不改）。
 ```
 
+## E13 macOS / Docker Desktop 参考基线（2026-11-02）
+
+> 这组数据来自 MacBook 本机 Docker Desktop，与上方 Windows 主机的 E13 结果分开保存。它用于阶段 2 在同一台 Mac 上比较资源变化，不作为跨机器的绝对容量阈值。
+
+### 环境与固定条件
+
+- 宿主机：macOS Darwin 25.6.0，ARM64，8 CPU，8 GiB 内存。
+- Docker Engine：`29.2.0`；Docker Compose：`v5.0.2`。
+- Docker Desktop 全局资源：4 CPU，`2068910080` bytes（约 1.93 GiB）。
+- Compose 没有设置 `cpus`、`mem_limit` 或 `deploy.resources`；app 容器的 `cpu.max` 和 `memory.max` 均为 unlimited。
+- app 容器 `ulimit -n=1048576`。
+- 负载生成器：宿主机 `go1.24.3 darwin/arm64` 编译；Gateway/Fake Provider 镜像使用 `golang:1.26-alpine` 构建。
+- Gateway：`127.0.0.1:18080`；诊断端口：`127.0.0.1:18082`；Fake Provider：`127.0.0.1:18081`。
+- app 和 Fake Provider 均按当前工作区源码重建；MySQL/Redis 数据卷保留。
+- model：`e1-model`；Fake Provider 正常 SSE 返回 HTTP 200、两个内容 chunk、usage 和 `[DONE]`。
+- `miss` 每条请求使用唯一消息；每轮 `n=200`；25 个本地测试用户和 Token 轮转，每轮开始前清空 `ratelimit:*`。
+- 每轮确认 Fake Provider 调用数，避免把缓存命中误当成回源结果。
+
+### E13-07 观测入口
+
+| 入口/指标 | 本机结果 |
+|---|---|
+| `GET /debug/pprof/` | HTTP 200，2594 bytes |
+| `GET /debug/vars` | HTTP 200，4097 bytes |
+| 空载 goroutine | 16 |
+| 空载 `db_pool` | `MaxOpen=100, Open=1, InUse=0, Idle=1, WaitCount=0` |
+
+空载稳定采样（5 次）还得到：`HeapAlloc=1.54~1.74 MB`、`HeapInuse=3.38~3.48 MB`、fd=14、TCP `ESTABLISHED=3`、`CLOSE_WAIT=0`、app cgroup 内存约 `57.3~57.6 MiB`。
+
+### E13-08 Provider 回源路径
+
+#### `miss` 正常 SSE
+
+所有轮次均为 200/200 HTTP 200，Fake Provider primary 调用 200 次。
+
+| 并发 | 吞吐 req/s | TTFB P50/P95/P99 ms | Total P50/P95/P99 ms |
+|---:|---:|---:|---:|
+| c=1 | 477.9 | 0.58 / 1.68 / 3.01 | 1.78 / 3.47 / 5.21 |
+| c=4 | 1216.7 | 0.83 / 1.91 / 10.20 | 2.69 / 4.91 / 21.33 |
+| c=16 | 2515.5 | 2.13 / 6.46 / 9.84 | 5.73 / 10.15 / 13.56 |
+| c=64 | 1749.5 | 9.82 / 21.07 / 21.61 | 27.52 / 69.38 / 81.12 |
+
+#### `fallback` 正常对照
+
+- 配置：primary 返回 500，fallback 返回正常 SSE。
+- `c=1, n=200`，HTTP 200 为 200/200。
+- 吞吐：`440.3 req/s`。
+- TTFB：P50/P95/P99=`0.92/1.49/3.47 ms`。
+- Total：P50/P95/P99=`1.99/3.09/7.23 ms`。
+- Fake Provider：primary 200 次，fallback 200 次。
+
+### E13-10 资源峰值和回落
+
+#### c64 正常 SSE 突发
+
+在 c64、n=200 的正常回源轮中，监控捕获到的峰值样本为：goroutine 242、fd 181、TCP `ESTABLISHED=169`、`CLOSE_WAIT=0`、app cgroup 内存 `78,491,648` bytes（约 74.9 MiB）。当前代码没有活跃请求计数器，本轮用负载生成器配置的并发数作为 `active_configured=64`，并以 goroutine、fd、TCP 和 Provider 调用数作为资源观测代理。
+
+#### 停载回落
+
+| 时点 | goroutine | HeapAlloc | HeapInuse | DB Open/Idle/InUse/Wait | fd | TCP EST/CLOSE_WAIT | app 内存 |
+|---|---:|---:|---:|---|---:|---|---:|
+| t0 | 37 | 6.99 MB | 9.37 MB | 20 / 20 / 0 / 0 | 73 | 63 / 0 | 71.6 MiB |
+| t5s | 37 | 5.31 MB | 8.08 MB | 20 / 20 / 0 / 0 | 73 | 62 / 0 | 71.4 MiB |
+| t10s | 37 | 6.44 MB | 8.94 MB | 20 / 20 / 0 / 0 | 73 | 62 / 0 | 70.5 MiB |
+| t30s | 37 | 6.80 MB | 9.22 MB | 20 / 20 / 0 / 0 | 73 | 62 / 0 | 70.5 MiB |
+
+DB 连接池从空载的 1 条连接扩展到 20 条 idle 连接后保持稳定；`WaitCount` 始终为 0。goroutine、fd 和 TCP 在停载后没有继续增长，当前没有观察到单调泄漏信号。
+
+#### 延长观测窗口的正常 SSE 控制
+
+为避免短突发错过资源峰值，另外执行了 primary `chunk-delay=100ms`、`c=16、n=200` 的正常 SSE 控制负载。它保持同一 Provider 回源路径，只延长每个请求的生命周期：
+
+- HTTP 200：200/200；primary 调用 200 次。
+- 吞吐：`72.8 req/s`。
+- TTFB P50/P95/P99：`102.96/138.16/138.28 ms`。
+- Total P50/P95/P99：`207.91/245.22/247.79 ms`。
+- 观测峰值：约 97 goroutine、103 fd、92 条 TCP、app 内存约 74.6 MiB。
+- 采样期间 `db_pool` 为 `Open=20、InUse=0、Idle=20、WaitCount=0`。
+
+这轮是资源观测控制，不是阶段 2 的取消实验。
+
+### E13-12 heap 基线
+
+已保存正常 SSE 前后的 heap profile 快照：
+
+- 空载/预热后：`heap_idle_initial.out`，2816 bytes。
+- c64 负载结束后 t0：`heap_recovery_t0.out`，20011 bytes。
+- 停载 30 秒后：`heap_recovery_t30.out`，21076 bytes。
+
+对应的 `memstats` 快照显示：c64 结束后 `TotalAlloc=279,997,968` bytes、`NumGC=88`；30 秒后 `TotalAlloc=308,489,616` bytes、`NumGC=96`。本轮只建立快照，不做完整 `go tool pprof -top` 归因。
+
+### 本机结论和后续用法
+
+- E13-07 诊断入口在本机可用。
+- E13-08 的 Provider 回源控制组已经建立；`c=16` 是本机吞吐最高的已测档位，c64 出现吞吐下降和尾延迟上升。
+- E13-10 的资源回落控制组显示停载 30 秒后资源进入稳定平台；DB idle 连接保温属于当前配置行为，不作为泄漏判据。
+- E13-12 已有本机 heap 前后快照，后续 E9 若出现持续增长，再分析 profile 内容。
+- Mac 和 Windows 的数据用于各自机器上的前后对比；跨机器数字只作参考，不直接作为相同容量阈值。
+
 ## 完成标准
 
 - Fake Provider 可以稳定重现 E1 表中的每个场景，并能清空和查询调用统计。

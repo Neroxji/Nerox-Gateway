@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,17 +35,19 @@ type configRequest struct {
 }
 
 type requestRecord struct {
-	ID            string    `json:"id"`
-	Provider      string    `json:"provider"`
-	Scenario      string    `json:"scenario"`
-	Authorization string    `json:"authorization"`
-	CallNumber    int       `json:"call_number"`
-	StatusCode    int       `json:"status_code"`
-	Chunks        int       `json:"chunks"`
-	Error         string    `json:"error,omitempty"`
-	StartedAt     time.Time `json:"started_at"`
-	HeaderAt      time.Time `json:"header_at,omitempty"`
-	EndedAt       time.Time `json:"ended_at"`
+	ID               string    `json:"id"`
+	Provider         string    `json:"provider"`
+	Scenario         string    `json:"scenario"`
+	Authorization    string    `json:"authorization"`
+	CallNumber       int       `json:"call_number"`
+	StatusCode       int       `json:"status_code"`
+	Chunks           int       `json:"chunks"`
+	Error            string    `json:"error,omitempty"`
+	CancelObserved   bool      `json:"cancel_observed,omitempty"`
+	CancelObservedAt time.Time `json:"cancel_observed_at,omitempty"`
+	StartedAt        time.Time `json:"started_at"`
+	HeaderAt         time.Time `json:"header_at,omitempty"`
+	EndedAt          time.Time `json:"ended_at"`
 }
 
 type fakeProvider struct {
@@ -167,19 +170,21 @@ func (p *fakeProvider) completions(providerName string) http.HandlerFunc {
 			config.Scenario = "normal"
 		}
 
-		result := p.serveScenario(w, config, requestID, callNumber)
+		result := p.serveScenario(w, r.Context(), config, requestID, callNumber)
 		record := requestRecord{
-			ID:            requestID,
-			Provider:      providerName,
-			Scenario:      config.Scenario,
-			Authorization: r.Header.Get("Authorization"),
-			CallNumber:    callNumber,
-			StatusCode:    result.statusCode,
-			Chunks:        result.chunks,
-			Error:         result.err,
-			StartedAt:     started,
-			HeaderAt:      result.headerAt,
-			EndedAt:       time.Now(),
+			ID:               requestID,
+			Provider:         providerName,
+			Scenario:         config.Scenario,
+			Authorization:    r.Header.Get("Authorization"),
+			CallNumber:       callNumber,
+			StatusCode:       result.statusCode,
+			Chunks:           result.chunks,
+			Error:            result.err,
+			CancelObserved:   result.cancelObserved,
+			CancelObservedAt: result.cancelObservedAt,
+			StartedAt:        started,
+			HeaderAt:         result.headerAt,
+			EndedAt:          time.Now(),
 		}
 		p.finishRequest(record)
 
@@ -188,13 +193,15 @@ func (p *fakeProvider) completions(providerName string) http.HandlerFunc {
 }
 
 type scenarioResult struct {
-	statusCode int
-	chunks     int
-	err        string
-	headerAt   time.Time
+	statusCode       int
+	chunks           int
+	err              string
+	headerAt         time.Time
+	cancelObserved   bool
+	cancelObservedAt time.Time
 }
 
-func (p *fakeProvider) serveScenario(w http.ResponseWriter, config endpointConfig, requestID string, callNumber int) scenarioResult {
+func (p *fakeProvider) serveScenario(w http.ResponseWriter, ctx context.Context, config endpointConfig, requestID string, callNumber int) scenarioResult {
 	if config.FailFirst > 0 && callNumber <= config.FailFirst {
 		return writeStatus(w, statusOrDefault(config.StatusCode), "configured first-call failure")
 	}
@@ -205,6 +212,8 @@ func (p *fakeProvider) serveScenario(w http.ResponseWriter, config endpointConfi
 	case "header-delay":
 		sleepMillis(config.HeaderDelayMS, defaultDelay)
 		return writeNormalStream(w, config.ChunkDelayMS)
+	case "cancel-aware-header-delay":
+		return waitForCancelBeforeHeaders(w, ctx, config.HeaderDelayMS)
 	case "first-chunk-delay":
 		return writeFirstChunkDelayed(w, config.FirstChunkDelayMS)
 	case "chunk-delay":
@@ -221,6 +230,26 @@ func (p *fakeProvider) serveScenario(w http.ResponseWriter, config endpointConfi
 		return writeLongLine(w)
 	default:
 		return writeStatus(w, http.StatusBadRequest, "unknown fake provider scenario")
+	}
+}
+
+func waitForCancelBeforeHeaders(w http.ResponseWriter, ctx context.Context, delayMS int) scenarioResult {
+	delay := defaultDelay
+	if delayMS > 0 {
+		delay = time.Duration(delayMS) * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return scenarioResult{
+			err:              ctx.Err().Error(),
+			cancelObserved:   true,
+			cancelObservedAt: time.Now(),
+		}
+	case <-timer.C:
+		return writeNormalStream(w, 0)
 	}
 }
 

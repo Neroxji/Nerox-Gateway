@@ -94,9 +94,9 @@
 |---|---|---|---|
 | N1 | 已完成（修复及自动化复验） | 2026-10-28 | [N1-admin-security.md](results/N1-admin-security.md) |
 | E1 | 已完成（E1-01~E1-09） | 2026-10-28 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
-| E13 | 进行中（全部观测完成；余变体【暂缓】、迁移结论） | 2026-11-01 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
-| E2 | 未开始 | | |
-| E9 | 未开始 | | |
+| E13 | 进行中（Windows 主机观测完成，macOS 本机参考基线完成；余变体【暂缓】、迁移结论） | 2026-11-03 | [Phase1-E01-E13-upstream-baseline.md](results/Phase1-E01-E13-upstream-baseline.md) |
+| E2 | E2-01~04 已执行（含 Provider handler 取消感知验证）；代码修复未开始 | 2026-11-03 | [Phase2-E02-E09-sse-resource-baseline.md](results/Phase2-E02-E09-sse-resource-baseline.md) |
+| E9 | 四类资源负载已执行：慢 Provider、慢客户端、c=16 分阶段断开、两轮持续并发；未观察到无界 goroutine/fd/TCP 增长 | 2026-11-04 | [Phase2-E02-E09-sse-resource-baseline.md](results/Phase2-E02-E09-sse-resource-baseline.md) |
 | E10 | 未开始 | | |
 | N5 | 未开始 | | |
 | E6 | 未开始 | | |

@@ -4,4 +4,5 @@ backend/config.json
 
 .DS_Store
 experiments/support/e13-tokens.txt
+experiments/support/e13-phase2-tokens.txt
 *.exe
